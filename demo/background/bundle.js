@@ -160,7 +160,18 @@ function pixel(graph, options) {
     /**
      * Gets three.js scene where current graph is rendered
      */
-    scene: getScene
+    scene: getScene,
+
+    /**
+     * Forces renderer to update scene, without waiting for notifications
+     * from layouter
+     */
+    redraw: redraw,
+
+    // Low level methods to get edgeView/nodeView.
+    // TODO: update docs if this sticks.
+    edgeView: getEdgeView,
+    nodeView: getNodeView
   };
 
   eventify(api);
@@ -197,6 +208,19 @@ function pixel(graph, options) {
 
   function getCamera() {
     return camera;
+  }
+
+  function getEdgeView() {
+    return edgeView;
+  }
+
+  function getNodeView() {
+    return nodeView;
+  }
+
+  function redraw() {
+    edgeView.refresh();
+    nodeView.refresh();
   }
 
   function clearColor(newColor) {
@@ -297,7 +321,11 @@ function pixel(graph, options) {
       nodeModel.position = position;
       nodeModel.idx = idx;
 
-      nodes.push(makeActive(nodeModel));
+      if (options.activeNode) {
+        nodes.push(makeActive(nodeModel));
+      } else {
+        nodes.push(nodeModel);
+      }
 
       nodeIdToIdx.set(node.id, idx);
     }
@@ -318,7 +346,11 @@ function pixel(graph, options) {
 
       edgeIdToIndex.set(edge.id, edgeModel.idx);
 
-      edges.push(makeActive(edgeModel));
+      if (options.activeLink) {
+        edges.push(makeActive(edgeModel));
+      } else {
+        edges.push(edgeModel);
+      }
     }
   }
 
@@ -332,8 +364,8 @@ function pixel(graph, options) {
     camera.position.z = 200;
 
     scene.add(camera);
-    nodeView = createNodeView(scene);
-    edgeView = createEdgeView(scene);
+    nodeView = createNodeView(scene, options);
+    edgeView = createEdgeView(scene, options);
 
     if (options.autoFit) autoFitController = createAutoFit(nodeView, camera);
 
@@ -347,6 +379,7 @@ function pixel(graph, options) {
     renderer = new THREE.WebGLRenderer(glOptions);
 
     renderer.setClearColor(options.clearColor, options.clearAlpha);
+    if (window && window.devicePixelRatio) renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(container.clientWidth, container.clientHeight);
     container.appendChild(renderer.domElement);
 
@@ -538,7 +571,7 @@ var THREE = require('three');
 
 module.exports = edgeView;
 
-function edgeView(scene) {
+function edgeView(scene, options) {
   var total = 0;
   var edges; // edges of the graph
   var colors, points; // buffer attributes that represent edge.
@@ -556,11 +589,16 @@ function edgeView(scene) {
   return {
     init: init,
     update: update,
-    needsUpdate: needsUpdate
+    needsUpdate: needsUpdate,
+    setFromColor: fromColor,
+    setToColor: toColor,
+    setFromPosition: fromPosition,
+    setToPosition: toPosition,
+    refresh: refresh
   };
 
   function needsUpdate() {
-    return colorDirty;
+    return colorDirty || positionDirty;
   }
 
   function update() {
@@ -589,7 +627,7 @@ function edgeView(scene) {
 
     for (var i = 0; i < total; ++i) {
       var edge = edges[i];
-      edge.connect(edgeConnector);
+      if (options.activeLink) edge.connect(edgeConnector);
 
       fromPosition(edge);
       toPosition(edge);
@@ -615,8 +653,21 @@ function edgeView(scene) {
     scene.add(edgeMesh);
   }
 
+  function refresh() {
+    for (var i = 0; i < total; ++i) {
+      var edge = edges[i];
+
+      fromPosition(edge);
+      toPosition(edge);
+
+      fromColor(edge);
+      toColor(edge);
+    }
+  }
+
   function disconnectOldEdges() {
     if (!edges) return;
+    if (!options.activeLink) return;
     for (var i = 0; i < edges.length; ++i) {
       edges[i].disconnect(edgeConnector);
     }
@@ -1228,7 +1279,7 @@ var THREE = require('three');
 
 module.exports = nodeView;
 
-function nodeView(scene) {
+function nodeView(scene, options) {
   var particleMaterial = require('./createMaterial.js')();
   var total;
   var nodes;
@@ -1247,11 +1298,15 @@ function nodeView(scene) {
     init: init,
     update: update,
     needsUpdate: needsUpdate,
-    getBoundingSphere: getBoundingSphere
+    getBoundingSphere: getBoundingSphere,
+    setNodePosition: position,
+    setNodeColor: color,
+    setNodeSize: size,
+    refresh: refresh
   };
 
   function needsUpdate() {
-    return colorDirty || sizeDirty;
+    return colorDirty || sizeDirty || positionDirty;
   }
 
   function color(node) {
@@ -1333,9 +1388,18 @@ function nodeView(scene) {
       var node = nodes[i];
       // first make sure any update to underlying node properties result in
       // graph update:
-      node.connect(nodeConnector);
+      if (options.activeNode) node.connect(nodeConnector);
+    }
 
-      // then invoke first-time node rendering
+    refresh();
+  }
+
+  /**
+   * Forces renderer to refresh positions/colors/sizes for each model.
+   */
+  function refresh() {
+    for (var i = 0; i < total; ++i) {
+      var node = nodes[i];
       position(node);
       color(node);
       size(node);
@@ -1344,6 +1408,8 @@ function nodeView(scene) {
 
   function disconnectOldNodes() {
     if (!nodes) return;
+    if (!options.activeNode) return;
+
     for (var i = 0; i < nodes.length; ++i) {
       nodes[i].disconnect(nodeConnector);
     }
@@ -41441,6 +41507,22 @@ function validateOptions(options) {
    * Experimental API: How node should be rendered?
    */
   options.node = typeof options.node === 'function' ? options.node : defaultNode;
+
+  /**
+   * Experimental API: When activeNode is explicitly set to false, then no proxy
+   * object is created. Which means actual updates to the node have to be manual
+   *
+   * TODO: Extend this documentation if this approach sticks.
+   */
+  options.activeNode = typeof options.activeNode === 'undefined' ? true : options.activeNode;
+
+  /**
+   * Experimental API: When activeLink is explicitly set to false, then no proxy
+   * object is created for links. Which means actual updates to the link have to be manual
+   *
+   * TODO: Extend this documentation if this approach sticks.
+   */
+  options.activeLink = typeof options.activeLink === 'undefined' ? true : options.activeLink;
 
   return options;
 }

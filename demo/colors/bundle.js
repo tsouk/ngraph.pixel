@@ -35,9 +35,18 @@ function getNumber(string, defaultValue) {
 }
 
 },{"../../":2,"ngraph.generators":27,"query-string":48}],2:[function(require,module,exports){
-module.exports = pixel;
 var THREE = require('three');
+
+module.exports = pixel;
+
+/**
+ * Expose to the outter world instance of three.js
+ * so that they can use it if they need it
+ */
+module.exports.THREE = THREE;
+
 var eventify = require('ngraph.events');
+
 var createNodeView = require('./lib/nodeView.js');
 var createEdgeView = require('./lib/edgeView.js');
 var createTooltipView = require('./lib/tooltip.js');
@@ -116,6 +125,14 @@ function pixel(graph, options) {
     clearColor: clearColor,
 
     /**
+     * Allows clients to set/get current clear color opacity
+     *
+     * @param {number+} alpha if specified, then new alpha opacity is set. Otherwise
+     * returns current clear color alpha.
+     */
+    clearAlpha: clearAlpha,
+
+    /**
      * Synonmim for `clearColor`. Sets the background color of the scene
      *
      * @param {number+} color if specified, then new color is set. Otherwise
@@ -153,7 +170,23 @@ function pixel(graph, options) {
      *
      * @param {Function} cb - node visitor. Accepts one argument, which is nodeUI
      */
-    forEachNode: forEachNode
+    forEachNode: forEachNode,
+
+    /**
+     * Gets three.js scene where current graph is rendered
+     */
+    scene: getScene,
+
+    /**
+     * Forces renderer to update scene, without waiting for notifications
+     * from layouter
+     */
+    redraw: redraw,
+
+    // Low level methods to get edgeView/nodeView.
+    // TODO: update docs if this sticks.
+    edgeView: getEdgeView,
+    nodeView: getNodeView
   };
 
   eventify(api);
@@ -192,11 +225,30 @@ function pixel(graph, options) {
     return camera;
   }
 
+  function getEdgeView() {
+    return edgeView;
+  }
+
+  function getNodeView() {
+    return nodeView;
+  }
+
+  function redraw() {
+    edgeView.refresh();
+    nodeView.refresh();
+  }
+
   function clearColor(newColor) {
     newColor = normalizeColor(newColor);
     if (typeof newColor !== 'number') return renderer.getClearColor();
 
     renderer.setClearColor(newColor);
+  }
+
+  function clearAlpha(newAlpha) {
+    if (typeof newAlpha !== 'number') return renderer.getClearAlpha();
+
+    renderer.setClearAlpha(newAlpha);
   }
 
   function run() {
@@ -228,6 +280,10 @@ function pixel(graph, options) {
       input.adjustSpeed(autoFitController.lastRadius());
     }
     renderer.render(scene, camera);
+  }
+
+  function getScene() {
+    return scene;
   }
 
   function beforeFrame(newBeforeFrameCallback) {
@@ -280,7 +336,11 @@ function pixel(graph, options) {
       nodeModel.position = position;
       nodeModel.idx = idx;
 
-      nodes.push(makeActive(nodeModel));
+      if (options.activeNode) {
+        nodes.push(makeActive(nodeModel));
+      } else {
+        nodes.push(nodeModel);
+      }
 
       nodeIdToIdx.set(node.id, idx);
     }
@@ -301,7 +361,11 @@ function pixel(graph, options) {
 
       edgeIdToIndex.set(edge.id, edgeModel.idx);
 
-      edges.push(makeActive(edgeModel));
+      if (options.activeLink) {
+        edges.push(makeActive(edgeModel));
+      } else {
+        edges.push(edgeModel);
+      }
     }
   }
 
@@ -315,16 +379,22 @@ function pixel(graph, options) {
     camera.position.z = 200;
 
     scene.add(camera);
-    nodeView = createNodeView(scene);
-    edgeView = createEdgeView(scene);
+    nodeView = createNodeView(scene, options);
+    edgeView = createEdgeView(scene, options);
 
     if (options.autoFit) autoFitController = createAutoFit(nodeView, camera);
 
-    renderer = new THREE.WebGLRenderer({
-      antialias: false
-    });
+    var glOptions = {
+      antialias: false,
+    };
+    if (options.clearAlpha !== 1) {
+      glOptions.alpha = true;
+    }
 
-    renderer.setClearColor(options.clearColor, 1);
+    renderer = new THREE.WebGLRenderer(glOptions);
+
+    renderer.setClearColor(options.clearColor, options.clearAlpha);
+    if (window && window.devicePixelRatio) renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(container.clientWidth, container.clientHeight);
     container.appendChild(renderer.domElement);
 
@@ -516,7 +586,7 @@ var THREE = require('three');
 
 module.exports = edgeView;
 
-function edgeView(scene) {
+function edgeView(scene, options) {
   var total = 0;
   var edges; // edges of the graph
   var colors, points; // buffer attributes that represent edge.
@@ -534,11 +604,16 @@ function edgeView(scene) {
   return {
     init: init,
     update: update,
-    needsUpdate: needsUpdate
+    needsUpdate: needsUpdate,
+    setFromColor: fromColor,
+    setToColor: toColor,
+    setFromPosition: fromPosition,
+    setToPosition: toPosition,
+    refresh: refresh
   };
 
   function needsUpdate() {
-    return colorDirty;
+    return colorDirty || positionDirty;
   }
 
   function update() {
@@ -567,7 +642,7 @@ function edgeView(scene) {
 
     for (var i = 0; i < total; ++i) {
       var edge = edges[i];
-      edge.connect(edgeConnector);
+      if (options.activeLink) edge.connect(edgeConnector);
 
       fromPosition(edge);
       toPosition(edge);
@@ -593,8 +668,21 @@ function edgeView(scene) {
     scene.add(edgeMesh);
   }
 
+  function refresh() {
+    for (var i = 0; i < total; ++i) {
+      var edge = edges[i];
+
+      fromPosition(edge);
+      toPosition(edge);
+
+      fromColor(edge);
+      toColor(edge);
+    }
+  }
+
   function disconnectOldEdges() {
     if (!edges) return;
+    if (!options.activeLink) return;
     for (var i = 0; i < edges.length; ++i) {
       edges[i].disconnect(edgeConnector);
     }
@@ -1203,11 +1291,11 @@ module.exports = [
 
 },{}],14:[function(require,module,exports){
 var THREE = require('three');
-var particleMaterial = require('./createMaterial.js')();
 
 module.exports = nodeView;
 
-function nodeView(scene) {
+function nodeView(scene, options) {
+  var particleMaterial = require('./createMaterial.js')();
   var total;
   var nodes;
   var colors, points, sizes;
@@ -1225,11 +1313,15 @@ function nodeView(scene) {
     init: init,
     update: update,
     needsUpdate: needsUpdate,
-    getBoundingSphere: getBoundingSphere
+    getBoundingSphere: getBoundingSphere,
+    setNodePosition: position,
+    setNodeColor: color,
+    setNodeSize: size,
+    refresh: refresh
   };
 
   function needsUpdate() {
-    return colorDirty || sizeDirty;
+    return colorDirty || sizeDirty || positionDirty;
   }
 
   function color(node) {
@@ -1311,9 +1403,18 @@ function nodeView(scene) {
       var node = nodes[i];
       // first make sure any update to underlying node properties result in
       // graph update:
-      node.connect(nodeConnector);
+      if (options.activeNode) node.connect(nodeConnector);
+    }
 
-      // then invoke first-time node rendering
+    refresh();
+  }
+
+  /**
+   * Forces renderer to refresh positions/colors/sizes for each model.
+   */
+  function refresh() {
+    for (var i = 0; i < total; ++i) {
+      var node = nodes[i];
       position(node);
       color(node);
       size(node);
@@ -1322,6 +1423,8 @@ function nodeView(scene) {
 
   function disconnectOldNodes() {
     if (!nodes) return;
+    if (!options.activeNode) return;
+
     for (var i = 0; i < nodes.length; ++i) {
       nodes[i].disconnect(nodeConnector);
     }
@@ -1335,11 +1438,13 @@ function nodeView(scene) {
 module.exports = createTooltipView;
 
 var tooltipStyle = require('../style/style.js');
-require('insert-css')(tooltipStyle);
+var insertCSS = require('insert-css');
 
 var elementClass = require('element-class');
 
 function createTooltipView(container) {
+  insertCSS(tooltipStyle);
+
   var view = {
     show: show,
     hide: hide
@@ -41395,6 +41500,12 @@ function validateOptions(options) {
    */
   options.clearColor = typeof options.clearColor === 'number' ? options.clearColor : 0x000000;
 
+
+  /**
+   * Clear color opacity from 0 (transparent) to 1 (opaque); Default value is 1;
+   */
+  options.clearAlpha = typeof options.clearAlpha === 'number' ? options.clearAlpha : 1;
+
   /**
    * Layout algorithm factory. Valid layout algorithms are required to have just two methods:
    * `getNodePosition(nodeId)` and `step()`. See `pixel.layout` module for the
@@ -41411,6 +41522,22 @@ function validateOptions(options) {
    * Experimental API: How node should be rendered?
    */
   options.node = typeof options.node === 'function' ? options.node : defaultNode;
+
+  /**
+   * Experimental API: When activeNode is explicitly set to false, then no proxy
+   * object is created. Which means actual updates to the node have to be manual
+   *
+   * TODO: Extend this documentation if this approach sticks.
+   */
+  options.activeNode = typeof options.activeNode === 'undefined' ? true : options.activeNode;
+
+  /**
+   * Experimental API: When activeLink is explicitly set to false, then no proxy
+   * object is created for links. Which means actual updates to the link have to be manual
+   *
+   * TODO: Extend this documentation if this approach sticks.
+   */
+  options.activeLink = typeof options.activeLink === 'undefined' ? true : options.activeLink;
 
   return options;
 }

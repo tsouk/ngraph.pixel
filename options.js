@@ -23,7 +23,7 @@ function validateOptions(options) {
   /**
    * Background of the scene in hexadecimal form. Default value is 0x000000 (black);
    */
-  options.clearColor = typeof options.clearColor === 'number' ? options.clearColor : 0x000000;
+  options.clearColor = typeof options.clearColor === 'number' ? options.clearColor : 0xffffff;
 
 
   /**
@@ -72,5 +72,5 @@ function defaultNode(/* node */) {
 }
 
 function defaultLink(/* link */) {
-  return { fromColor: 0xFFFFFF,  toColor: 0xFFFFFF };
+  return { fromColor: 0x000000,  toColor: 0x000000 };
 }
