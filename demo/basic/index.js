@@ -8,7 +8,6 @@ const html2graphJSON = require('./www.bbc.co.uk-gel');
 var data = JSON.stringify(html2graphJSON);
 var eventify = require('ngraph.events');
 
-
 // Pin the html node,root? 
 // triangle per node? where is three.js?
 // set color per node
@@ -17,7 +16,6 @@ var eventify = require('ngraph.events');
 /*
   * Breadth First
   */
-  
 recurseBF.recurseBF(graph, recurseBF.getHtmlNode(html2graphJSON));
 var renderer = renderGraph(graph);
 
@@ -35,10 +33,9 @@ recurseBF.events.on('added', function( parentNodeId, childNodeId ) {
   })
   //renderer.getNode(childNodeId).size = 100; // this is reset when something is added to the graph
   //renderer.getNode(childNodeId).color = 0x000000; // this is reset when something is added to the graph
-  renderer.focus(); // not sure what that does... 
+  renderer.focus(); // not sure what that does...
   renderer.stable(false);
 });
-
 
 
 // Make non 3d, and set timestep to 9, slowish
