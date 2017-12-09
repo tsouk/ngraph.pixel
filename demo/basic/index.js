@@ -18,6 +18,10 @@ function start3dgraph (data) {
 
   recurseBF.events.on('cleared', function() {
     console.log('Finished adding nodes, stable');
+    renderer.forEachNode(function(nodeUI){
+      nodeUI.color = '0x' + recurseBF.intToRGB(recurseBF.hashCode(nodeUI.id));
+      nodeUI.size = 50;
+    })
     renderer.stable(true);
   });
 
