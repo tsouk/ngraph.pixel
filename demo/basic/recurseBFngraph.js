@@ -43,7 +43,7 @@ function createRoot(graph, domNode) {
     y: 0,
     size: nodeSize,
     label: rootId + '-0',
-    color: '#ccc'
+    tagColor: '0x000000'
   });
   
   return rootId;
