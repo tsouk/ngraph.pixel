@@ -2,8 +2,9 @@ var query = require('query-string').parse(window.location.search.substring(1));
 var renderGraph = require('../../');
 
 var graph = require('ngraph.graph')();
-const recurseBF = require('./recurseBFngraph');
+const recurseBF = require('../../lib/recurseBFngraph');
 var eventify = require('ngraph.events');
+
 
 // Pin the html node,root? 
 // triangle per node? where is three.js? when flat

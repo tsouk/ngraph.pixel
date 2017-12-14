@@ -1,15 +1,23 @@
 (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
-var query = require('query-string').parse(window.location.search.substring(1));
-var renderGraph = require('../../');
 
-var graph = require('ngraph.graph')();
+const graph = require('ngraph.graph')();
 const recurseBF = require('../../lib/recurseBFngraph');
-var eventify = require('ngraph.events');
+const threeGraphics = require('../../lib/threeGraphics');
+const eventify = require('ngraph.events');
+const nthree = require('ngraph.three');
+const THREE = require('three');
 
+var scene = new THREE.Scene();
+scene.background = new THREE.Color( 0xdddddd );
+scene.fog = new THREE.FogExp2( 0xdddddd, 0.002 );
 
-// Pin the html node,root? 
-// triangle per node? where is three.js? when flat
-// set size per node?
+var graphics = nthree(graph, {physicsSettings : {timeStep: 20}, scene: scene });
+graphics.createNodeUI(threeGraphics.createNodeUI);
+//graphics.scene.fog = new graphics.THREE.FogExp2( 0xcccccc, 0.2 );
+//graphics.scene.background = new graphics.THREE.Color( 0xffffff );
+graphics.run(); // begin animation loop
+// layout.is3d(false); // Make non 3d, have to update the gui tho
+
 
 /*
   * Breadth First
@@ -17,1439 +25,36 @@ var eventify = require('ngraph.events');
 function start3dgraph (data) {
   const colorPalette = '5555000000';
   recurseBF.recurseBF(graph, recurseBF.getHtmlNode(data));
-  var renderer = renderGraph(graph);
   const regex = /^[a-z]*/;
 
   recurseBF.events.on('cleared', function() {
     console.log('Finished adding nodes, stable');
-    renderer.forEachNode(function(nodeUI){
+    graph.forEachNode(function(nodeUI){
       nodeUI.color = '0x' + recurseBF.intToRGB(recurseBF.hashCode(regex.exec(nodeUI.id)[0] + colorPalette));
       nodeUI.size = 50;
     })
-    renderer.stable(true);
+    //renderer.stable(true);
   });
 
   recurseBF.events.on('added', function( parentNodeId, childNodeId ) {
     //renderer.graph().addLink(parentNodeId, childNodeId);
-    renderer.forEachNode(function(nodeUI){
+    graph.forEachNode(function(nodeUI){
       myArray = regex.exec(nodeUI.id);
       nodeUI.color = '0x' + recurseBF.intToRGB(recurseBF.hashCode(regex.exec(nodeUI.id)[0] + colorPalette));
       nodeUI.size = 50;
     })
-    renderer.getNode(childNodeId).size = 100; // this is reset when something is added to the graph
-    renderer.getNode(childNodeId).color = 0x000000; // this is reset when something is added to the graph
-    renderer.focus(); // not sure what that does...
-    renderer.stable(false);
+    //renderer.getNode(childNodeId).size = 100; // this is reset when something is added to the graph
+    //renderer.getNode(childNodeId).color = 0x000000; // this is reset when something is added to the graph
+    graphics.resetStable();
   });
-
-  var layout = renderer.layout();
-  var simulator = layout.simulator;
-  simulator['timeStep'](9);
-  //layout.is3d(false); // Make non 3d, have to update the gui tho
-  renderer.focus();
 }
 
 if (window) {
   window.start3dgraph = start3dgraph;
+  window.scene = graphics.scene;
+  window.THREE = THREE;
 }
-},{"../../":2,"../../lib/recurseBFngraph":15,"ngraph.events":19,"ngraph.graph":28,"query-string":48}],2:[function(require,module,exports){
-var THREE = require('three');
-
-module.exports = pixel;
-
-/**
- * Expose to the outter world instance of three.js
- * so that they can use it if they need it
- */
-module.exports.THREE = THREE;
-
-var eventify = require('ngraph.events');
-
-var createNodeView = require('./lib/nodeView.js');
-var createEdgeView = require('./lib/edgeView.js');
-var createTooltipView = require('./lib/tooltip.js');
-var createAutoFit = require('./lib/autoFit.js');
-var createInput = require('./lib/input.js');
-var validateOptions = require('./options.js');
-var flyTo = require('./lib/flyTo.js');
-
-var makeActive = require('./lib/makeActive.js');
-
-function pixel(graph, options) {
-  // This is our public API.
-  var api = {
-    /**
-     * attempts to fit graph into available screen size
-     */
-    autoFit: autoFit,
-
-    /**
-     * Returns current layout manager
-     */
-    layout: getLayout,
-
-    /**
-     * Gets or sets value which indicates whether layout is stable. When layout
-     * is stable, then no additional layout iterations are required. The renderer
-     * will stop calling `layout.step()`, which in turn will save CPU cycles.
-     *
-     * @param {boolean+} stableValue if this value is not specified, then current
-     * value of `isStable` will be returned. Otherwise the simulator stable flag
-     * will be forcefully set to the given value.
-     */
-    stable: stable,
-
-    /**
-     * Gets or sets graph that is rendered now
-     *
-     * @param {ngraph.graph+} graphValue if this value is not specified then current
-     * graph is returned. Otherwise renderer destroys current scene, and starts
-     * render new graph.
-     */
-    graph: graphInternal,
-
-    /**
-     * Attempts to give keyboard input focuse to the scene
-     */
-    focus: focus,
-
-    /**
-     * Requests renderer to move camera and focus on given node id.
-     *
-     * @param {string} nodeId identifier of the node to show
-     */
-    showNode: showNode,
-
-    /**
-     * Allows clients to provide a callback function, which is invoked before
-     * each rendering frame
-     *
-     * @param {function} newBeforeFrameCallback the callback function. This
-     * argument is not chained, and any new value overwrites the old one
-     */
-    beforeFrame: beforeFrame,
-
-    /**
-     * Returns instance of the three.js camera
-     */
-    camera: getCamera,
-
-    /**
-     * Allows clients to set/get current clear color of the scene (the background)
-     *
-     * @param {number+} color if specified, then new color is set. Otherwise
-     * returns current clear color.
-     */
-    clearColor: clearColor,
-
-    /**
-     * Allows clients to set/get current clear color opacity
-     *
-     * @param {number+} alpha if specified, then new alpha opacity is set. Otherwise
-     * returns current clear color alpha.
-     */
-    clearAlpha: clearAlpha,
-
-    /**
-     * Synonmim for `clearColor`. Sets the background color of the scene
-     *
-     * @param {number+} color if specified, then new color is set. Otherwise
-     * returns current clear color.
-     */
-    background: clearColor,
-
-    /**
-     * Gets UI for a given node id. If node creation function decided not to
-     * return UI for this node, falsy object is returned.
-     *
-     * @param {string} nodeId - identifier of the node
-     * @returns Object that represents UI for the node
-     */
-    getNode: getNode,
-
-    /**
-     * Gets UI for a given link id. If link creation function decided not to
-     * return UI for this link, falsy object is returned.
-     *
-     * @param {string} linkId - identifier of the link
-     * @returns Object that represents UI for the link
-     */
-    getLink: getLink,
-
-    /**
-     * Iterates over every link UI element
-     *
-     * @param {Function} cb - link visitor. Accepts one argument, which is linkUI
-     */
-    forEachLink: forEachLink,
-
-    /**
-     * Iterates over every node UI element
-     *
-     * @param {Function} cb - node visitor. Accepts one argument, which is nodeUI
-     */
-    forEachNode: forEachNode,
-
-    /**
-     * Gets three.js scene where current graph is rendered
-     */
-    scene: getScene,
-
-    /**
-     * Forces renderer to update scene, without waiting for notifications
-     * from layouter
-     */
-    redraw: redraw,
-
-    // Low level methods to get edgeView/nodeView.
-    // TODO: update docs if this sticks.
-    edgeView: getEdgeView,
-    nodeView: getNodeView
-  };
-
-  eventify(api);
-
-  options = validateOptions(options);
-
-  var beforeFrameCallback;
-  var container = options.container;
-  verifyContainerDimensions(container);
-
-  var layout = options.createLayout(graph, options);
-  if (layout && typeof layout.on === 'function') {
-    layout.on('reset', layoutReset);
-  }
-  var isStable = false;
-  var nodeIdToIdx = new Map();
-  var edgeIdToIndex = new Map();
-
-  var scene, camera, renderer;
-  var nodeView, edgeView, autoFitController, input;
-  var nodes, edges;
-  var tooltipView = createTooltipView(container);
-
-  init();
-  run();
-  focus();
-
-  return api;
-
-  function layoutReset() {
-    initPositions();
-    stable(false);
-  }
-
-  function getCamera() {
-    return camera;
-  }
-
-  function getEdgeView() {
-    return edgeView;
-  }
-
-  function getNodeView() {
-    return nodeView;
-  }
-
-  function redraw() {
-    edgeView.refresh();
-    nodeView.refresh();
-  }
-
-  function clearColor(newColor) {
-    newColor = normalizeColor(newColor);
-    if (typeof newColor !== 'number') return renderer.getClearColor();
-
-    renderer.setClearColor(newColor);
-  }
-
-  function clearAlpha(newAlpha) {
-    if (typeof newAlpha !== 'number') return renderer.getClearAlpha();
-
-    renderer.setClearAlpha(newAlpha);
-  }
-
-  function run() {
-    requestAnimationFrame(run);
-
-    if (beforeFrameCallback) {
-      beforeFrameCallback();
-    }
-    if (!isStable) {
-      isStable = layout.step();
-
-      updatePositions();
-
-      nodeView.update();
-      edgeView.update();
-    } else {
-      // we may not want to change positions, but colors/size could be changed
-      // at this moment, so let's take care of that:
-      if (nodeView.needsUpdate()) nodeView.update();
-      if (edgeView.needsUpdate()) edgeView.update();
-    }
-
-    if (isStable) api.fire('stable', true);
-
-    input.update();
-
-    if (autoFitController) {
-      autoFitController.update();
-      input.adjustSpeed(autoFitController.lastRadius());
-    }
-    renderer.render(scene, camera);
-  }
-
-  function getScene() {
-    return scene;
-  }
-
-  function beforeFrame(newBeforeFrameCallback) {
-    beforeFrameCallback = newBeforeFrameCallback;
-  }
-
-  function init() {
-    initScene();
-    initPositions();
-    listenToGraph();
-  }
-
-  function listenToGraph() {
-    // TODO: this is not efficient at all. We are recreating view from scratch on
-    // every single change.
-    graph.on('changed', initPositions);
-  }
-
-  function updatePositions() {
-    if (!nodes) return;
-
-    for (var i = 0; i < nodes.length; ++i) {
-      var node = nodes[i];
-      node.position = layout.getNodePosition(node.id);
-    }
-  }
-
-  function initPositions() {
-    edges = [];
-    nodes = [];
-    nodeIdToIdx = new Map();
-    edgeIdToIndex = new Map();
-    graph.forEachNode(addNodePosition);
-    graph.forEachLink(addEdgePosition);
-
-    nodeView.init(nodes);
-    edgeView.init(edges);
-
-    if (input) input.reset();
-
-    function addNodePosition(node) {
-      var nodeModel = options.node(node);
-      if (!nodeModel) return;
-      var idx = nodes.length;
-
-      var position = layout.getNodePosition(node.id);
-      if (typeof position.z !== 'number') position.z = 0;
-
-      nodeModel.id = node.id;
-      nodeModel.position = position;
-      nodeModel.idx = idx;
-
-      if (options.activeNode) {
-        nodes.push(makeActive(nodeModel));
-      } else {
-        nodes.push(nodeModel);
-      }
-
-      nodeIdToIdx.set(node.id, idx);
-    }
-
-    function addEdgePosition(edge) {
-      var edgeModel = options.link(edge);
-      if (!edgeModel) return;
-
-      var fromNode = nodes[nodeIdToIdx.get(edge.fromId)];
-      if (!fromNode) return; // cant have an edge that doesn't have a node
-
-      var toNode = nodes[nodeIdToIdx.get(edge.toId)];
-      if (!toNode) return;
-
-      edgeModel.idx = edges.length;
-      edgeModel.from = fromNode;
-      edgeModel.to = toNode;
-
-      edgeIdToIndex.set(edge.id, edgeModel.idx);
-
-      if (options.activeLink) {
-        edges.push(makeActive(edgeModel));
-      } else {
-        edges.push(edgeModel);
-      }
-    }
-  }
-
-  function initScene() {
-    scene = new THREE.Scene();
-    scene.sortObjects = false;
-
-    camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 20000);
-    camera.position.x = 0;
-    camera.position.y = 0;
-    camera.position.z = 200;
-
-    scene.add(camera);
-    nodeView = createNodeView(scene, options);
-    edgeView = createEdgeView(scene, options);
-
-    if (options.autoFit) autoFitController = createAutoFit(nodeView, camera);
-
-    var glOptions = {
-      antialias: false,
-    };
-    if (options.clearAlpha !== 1) {
-      glOptions.alpha = true;
-    }
-
-    renderer = new THREE.WebGLRenderer(glOptions);
-
-    renderer.setClearColor(options.clearColor, options.clearAlpha);
-    if (window && window.devicePixelRatio) renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.setSize(container.clientWidth, container.clientHeight);
-    container.appendChild(renderer.domElement);
-
-    input = createInput(camera, graph, renderer.domElement);
-    input.on('move', stopAutoFit);
-    input.on('nodeover', setTooltip);
-    input.on('nodeclick', passthrough('nodeclick'));
-    input.on('nodedblclick', passthrough('nodedblclick'));
-
-    window.addEventListener('resize', onWindowResize, false);
-  }
-
-  function getNode(nodeId) {
-    var idx = nodeIdToIdx.get(nodeId);
-    if (idx === undefined) return;
-
-    return nodes[idx];
-  }
-
-  function getLink(linkId) {
-    var idx = edgeIdToIndex.get(linkId);
-    if (idx === undefined) return;
-
-    return edges[idx];
-  }
-
-  function forEachLink(cb) {
-    if (typeof cb !== 'function') throw new Error('link visitor should be a function');
-    edges.forEach(cb);
-  }
-
-  function forEachNode(cb) {
-    if (typeof cb !== 'function') throw new Error('node visitor should be a function');
-    nodes.forEach(cb);
-  }
-
-  function setTooltip(e) {
-    var node = getNodeByIndex(e.nodeIndex);
-    if (node !== undefined) {
-      tooltipView.show(e, node);
-    } else {
-      tooltipView.hide(e);
-    }
-    api.fire('nodehover', node);
-  }
-
-  function passthrough(name) {
-    return function (e) {
-      var node = getNodeByIndex(e.nodeIndex);
-      if (node) api.fire(name, node);
-    };
-  }
-
-  function getNodeByIndex(nodeIndex) {
-    var nodeUI = nodes[nodeIndex];
-    return nodeUI && graph.getNode(nodeUI.id);
-  }
-
-  function stopAutoFit() {
-    input.off('move');
-    autoFitController = null;
-  }
-
-  function onWindowResize() {
-    camera.aspect = container.clientWidth / container.clientHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(container.clientWidth, container.clientHeight);
-  }
-
-  function autoFit() {
-    if (autoFitController) return; // we are already auto-fitting the graph.
-    // otherwise fire and forget autofit:
-    createAutoFit(nodeView, camera).update();
-  }
-
-  function getLayout() {
-    return layout;
-  }
-
-  function stable(stableValue) {
-    if (stableValue === undefined) return isStable;
-    isStable = stableValue;
-    api.fire('stable', isStable);
-  }
-
-  function graphInternal(newGraph) {
-    if (newGraph !== undefined) throw new Error('Not implemented, Anvaka, do it!');
-    return graph;
-  }
-
-  function normalizeColor(color) {
-    if (color === undefined) return color;
-    var colorType = typeof color;
-    if (colorType === 'number') return color;
-    if (colorType === 'string') return parseStringColor(color);
-    if (color.length === 3) return (color[0] << 16) | (color[1] << 8) | (color[2]);
-    throw new Error('Unrecognized color type: ' + color);
-  }
-
-  function parseStringColor(color) {
-    if (color[0] === '#') {
-      return Number.parseInt(color.substring(1), 16);
-    }
-    return Number.parseInt(color, 16);
-  }
-
-  function focus() {
-    var sceneElement = renderer && renderer.domElement;
-    if (sceneElement && typeof sceneElement.focus === 'function') sceneElement.focus();
-  }
-
-  function showNode(nodeId, stopDistance) {
-    stopDistance = typeof stopDistance === 'number' ? stopDistance : 100;
-    flyTo(camera, layout.getNodePosition(nodeId), stopDistance);
-  }
-}
-
-function verifyContainerDimensions(container) {
-  if (!container) {
-    throw new Error('container is required for the renderer');
-  }
-
-  if (container.clientWidth <= 0 || container.clientHeight <= 0) {
-    console.warn('Container is not visible. Make sure to set width/height to see the graph');
-  }
-}
-
-},{"./lib/autoFit.js":3,"./lib/edgeView.js":6,"./lib/flyTo.js":7,"./lib/input.js":9,"./lib/makeActive.js":11,"./lib/nodeView.js":14,"./lib/tooltip.js":16,"./options.js":52,"ngraph.events":19,"three":51}],3:[function(require,module,exports){
-var flyTo = require('./flyTo.js');
-module.exports = createAutoFit;
-
-function createAutoFit(nodeView, camera) {
-  var radius = 100;
-  return {
-    update: update,
-    lastRadius: getLastRadius
-  };
-
-  function update() {
-    var sphere = nodeView.getBoundingSphere();
-    radius = Math.max(sphere.radius, 100);
-    flyTo(camera, sphere.center, radius);
-  }
-
-  function getLastRadius() {
-    return radius;
-  }
-}
-
-},{"./flyTo.js":7}],4:[function(require,module,exports){
-var THREE = require('three');
-
-module.exports = createParticleMaterial;
-
-function createParticleMaterial() {
-
-  var vertexShader = require('./node-vertex.js');
-  var fragmentShader = require('./node-fragment.js');
-  var defaultTexture = require('./defaultTexture.js');
-
-  var loader = new THREE.TextureLoader();
-  var texture = loader.load(defaultTexture);
-
-  var uniforms = {
-    color: {
-      type: "c",
-      value: new THREE.Color(0xffffff)
-    },
-    texture: {
-      type: "t",
-      value: texture
-    }
-  };
-
-  var material =  new THREE.ShaderMaterial({
-    uniforms: uniforms,
-    vertexShader: vertexShader,
-    fragmentShader: fragmentShader,
-    transparent: true
-  });
-  return material;
-}
-
-},{"./defaultTexture.js":5,"./node-fragment.js":12,"./node-vertex.js":13,"three":51}],5:[function(require,module,exports){
-module.exports = 'data:image/png;base64,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';
-
-},{}],6:[function(require,module,exports){
-var THREE = require('three');
-
-module.exports = edgeView;
-
-function edgeView(scene, options) {
-  var total = 0;
-  var edges; // edges of the graph
-  var colors, points; // buffer attributes that represent edge.
-  var geometry, edgeMesh;
-  var colorDirty, positionDirty;
-
-  // declares bindings between model events and update handlers
-  var edgeConnector = {
-    fromColor: fromColor,
-    toColor: toColor,
-    'from.position': fromPosition,
-    'to.position': toPosition
-  };
-
-  return {
-    init: init,
-    update: update,
-    needsUpdate: needsUpdate,
-    setFromColor: fromColor,
-    setToColor: toColor,
-    setFromPosition: fromPosition,
-    setToPosition: toPosition,
-    refresh: refresh
-  };
-
-  function needsUpdate() {
-    return colorDirty || positionDirty;
-  }
-
-  function update() {
-    if (positionDirty) {
-      geometry.getAttribute('position').needsUpdate = true;
-      positionDirty = false;
-    }
-
-    if (colorDirty) {
-      geometry.getAttribute('color').needsUpdate = true;
-      colorDirty = false;
-    }
-  }
-
-  function init(edgeCollection) {
-    disconnectOldEdges();
-
-    edges = edgeCollection;
-    total = edges.length;
-
-    // If we can reuse old arrays - reuse them:
-    var pointsInitialized = (points !== undefined) && points.length === total * 6;
-    if (!pointsInitialized) points = new Float32Array(total * 6);
-    var colorsInitialized = (colors !== undefined) && colors.length === total * 6;
-    if (!colorsInitialized) colors = new Float32Array(total * 6);
-
-    for (var i = 0; i < total; ++i) {
-      var edge = edges[i];
-      if (options.activeLink) edge.connect(edgeConnector);
-
-      fromPosition(edge);
-      toPosition(edge);
-
-      fromColor(edge);
-      toColor(edge);
-    }
-
-    geometry = new THREE.BufferGeometry();
-    var material = new THREE.LineBasicMaterial({
-      vertexColors: THREE.VertexColors
-    });
-
-    geometry.addAttribute('position', new THREE.BufferAttribute(points, 3));
-    geometry.addAttribute('color', new THREE.BufferAttribute(colors, 3));
-
-    if (edgeMesh) {
-      scene.remove(edgeMesh);
-    }
-
-    edgeMesh = new THREE.LineSegments(geometry, material);
-    edgeMesh.frustumCulled = false;
-    scene.add(edgeMesh);
-  }
-
-  function refresh() {
-    for (var i = 0; i < total; ++i) {
-      var edge = edges[i];
-
-      fromPosition(edge);
-      toPosition(edge);
-
-      fromColor(edge);
-      toColor(edge);
-    }
-  }
-
-  function disconnectOldEdges() {
-    if (!edges) return;
-    if (!options.activeLink) return;
-    for (var i = 0; i < edges.length; ++i) {
-      edges[i].disconnect(edgeConnector);
-    }
-  }
-
-  function fromColor(edge) {
-    var fromColorHex = edge.fromColor;
-
-    var i6 = edge.idx * 6;
-
-    colors[i6    ] = ((fromColorHex >> 16) & 0xFF)/0xFF;
-    colors[i6 + 1] = ((fromColorHex >> 8) & 0xFF)/0xFF;
-    colors[i6 + 2] = (fromColorHex & 0xFF)/0xFF;
-
-    colorDirty = true;
-  }
-
-  function toColor(edge) {
-    var toColorHex = edge.toColor;
-    var i6 = edge.idx * 6;
-
-    colors[i6 + 3] = ((toColorHex >> 16) & 0xFF)/0xFF;
-    colors[i6 + 4] = ((toColorHex >> 8) & 0xFF)/0xFF;
-    colors[i6 + 5] = ( toColorHex & 0xFF)/0xFF;
-
-    colorDirty = true;
-  }
-
-  function fromPosition(edge) {
-    var from = edge.from.position;
-    var i6 = edge.idx * 6;
-
-    points[i6] = from.x;
-    points[i6 + 1] = from.y;
-    points[i6 + 2] = from.z;
-
-    positionDirty = true;
-  }
-
-  function toPosition(edge) {
-    var to = edge.to.position;
-    var i6 = edge.idx * 6;
-
-    points[i6 + 3] = to.x;
-    points[i6 + 4] = to.y;
-    points[i6 + 5] = to.z;
-
-    positionDirty = true;
-  }
-}
-
-},{"three":51}],7:[function(require,module,exports){
-/**
- * Moves camera to given point, and stops it and given radius
- */
-var THREE = require('three');
-var intersect = require('./intersect.js');
-
-module.exports = flyTo;
-
-function flyTo(camera, to, radius) {
-  var cameraOffset = radius / Math.tan(Math.PI / 180.0 * camera.fov * 0.5);
-
-  var from = {
-    x: camera.position.x,
-    y: camera.position.y,
-    z: camera.position.z,
-  };
-
-  camera.lookAt(new THREE.Vector3(to.x, to.y, to.z));
-  var cameraEndPos = intersect(from, to, cameraOffset);
-  camera.position.x = cameraEndPos.x;
-  camera.position.y = cameraEndPos.y;
-  camera.position.z = cameraEndPos.z;
-}
-
-},{"./intersect.js":10,"three":51}],8:[function(require,module,exports){
-/**
- * Gives an index of a node under mouse coordinates
- */
-var eventify = require('ngraph.events');
-var THREE = require('three');
-
-module.exports = createHitTest;
-
-function createHitTest(domElement) {
-  var particleSystem;
-  var lastIntersected;
-  var postponed = true;
-
-  var raycaster = new THREE.Raycaster();
-
-  // This defines sensitivity of raycaster. TODO: Should it depend on node size?
-  raycaster.params.Points.threshold = 10;
-  domElement = domElement || document.body;
-
-  // we will store mouse coordinates here to process on next RAF event (`update()` method)
-  var mouse = {
-    x: 0,
-    y: 0
-  };
-
-  // store DOM coordinates as well, to let clients know where mouse is
-  var domMouse = {
-    down: false,
-    x: 0,
-    y: 0,
-    nodeIndex: undefined
-  };
-  var singleClickHandler;
-
-  domElement.addEventListener('mousemove', onMouseMove, false);
-  domElement.addEventListener('mousedown', onMouseDown, false);
-  domElement.addEventListener('mouseup', onMouseUp, false);
-  domElement.addEventListener('touchstart', onTouchStart, false);
-  domElement.addEventListener('touchend', onTouchEnd, false);
-
-  var api = {
-    /**
-     * This should be called from RAF. Initiates process of hit test detection
-     */
-    update: update,
-
-    /**
-     * Reset all caches. Most likely underlying scene changed
-     * too much.
-     */
-    reset: reset,
-
-    /**
-     * Hit tester should not emit events until mouse moved
-     */
-    postpone: postpone
-  };
-
-  // let us publish events
-  eventify(api);
-  return api;
-
-  function postpone() {
-    // postpone processing of hit testing until next mouse movement
-    // this gives opportunity to avoid race conditions.
-    postponed = true;
-  }
-
-  function reset() {
-    particleSystem = null;
-  }
-
-  function onMouseUp() {
-    domMouse.down = false;
-    postponed = true;
-  }
-
-  function onMouseDown() {
-    postponed = false;
-    domMouse.down = true;
-    domMouse.nodeIndex = lastIntersected;
-
-    if (singleClickHandler) {
-      // If we were able to get here without clearing single click handler,
-      // then we are dealing with double click.
-
-      // No need to fire single click event anymore:
-      clearTimeout(singleClickHandler);
-      singleClickHandler = null;
-
-      // fire double click instead:
-      api.fire('nodedblclick', domMouse);
-    } else {
-      // Wait some time before firing event. It can be a double click...
-      singleClickHandler = setTimeout(function() {
-        api.fire('nodeclick', domMouse);
-        singleClickHandler = undefined;
-      }, 300);
-    }
-  }
-
-  function onTouchStart(e) {
-    if (!e.touches || e.touches.length !== 1) {
-      postponed = true;
-      return;
-    }
-
-    postponed = false;
-    setMouseCoordinates(e.touches[0]);
-  }
-
-  function onTouchEnd(e) {
-    if (e.touches && e.touches.length === 1) {
-      setMouseCoordinates(e.touches[0]);
-    }
-    setTimeout(function() {
-      postponed = false;
-      api.fire('nodeclick', domMouse);
-    }, 0);
-  }
-
-  function onMouseMove(e) {
-    setMouseCoordinates(e);
-    postponed = false; // mouse moved, we are free.
-  }
-
-  function setMouseCoordinates(e) {
-    var boundingRect = domElement.getBoundingClientRect();
-    mouse.x = ((e.pageX - boundingRect.left) / boundingRect.width) * 2 - 1;
-    mouse.y = -((e.pageY - boundingRect.top) / boundingRect.height) * 2 + 1;
-
-    domMouse.x = e.clientX;
-    domMouse.y = e.clientY;
-  }
-
-  function update(scene, camera) {
-    // We need to stop processing any events until user moves mouse.
-    // this is to avoid race conditions between search field and scene
-    if (postponed) return;
-
-    if (!particleSystem) {
-      scene.children.forEach(function(child) {
-        if (child.name === 'nodes') {
-          particleSystem = child;
-        }
-      });
-      if (!particleSystem) return;
-    }
-
-    raycaster.setFromCamera(mouse, camera);
-    var newIntersected = getIntersects(camera);
-
-    if (newIntersected !== undefined) {
-      if (lastIntersected !== newIntersected) {
-        lastIntersected = newIntersected;
-        notifySelected(lastIntersected);
-      }
-    } else if (typeof lastIntersected === 'number') {
-      // there is no node under mouse cursor. Let it know to UI:
-      lastIntersected = undefined;
-      notifySelected(undefined);
-    }
-  }
-
-  function getIntersects() {
-    var geometry = particleSystem.geometry;
-    var attributes = geometry.attributes;
-    var positions = attributes.position.array;
-    return raycast(positions, raycaster.ray, particleSystem.matrixWorld.elements);
-  }
-
-  function raycast(positions, ray, worldMatrix) {
-    var pointCount = positions.length / 3;
-    var minDistance = Number.POSITIVE_INFINITY;
-    var minIndex = -1;
-
-    var ox = ray.origin.x;
-    var oy = ray.origin.y;
-    var oz = ray.origin.z;
-
-    var dx = ray.direction.x;
-    var dy = ray.direction.y;
-    var dz = ray.direction.z;
-    var pt = {
-      x: 0,
-      y: 0,
-      z: 0
-    };
-
-    for (var i = 0; i < pointCount; i++) {
-      testPoint(positions[3 * i], positions[3 * i + 1], positions[3 * i + 2], i);
-    }
-
-    if (minIndex !== -1) {
-      return minIndex;
-    }
-
-    function testPoint(x, y, z, idx) {
-      var distance = distanceTo(x, y, z);
-      if (distance < 10) {
-        var ip = nearestTo(x, y, z); // intersect point
-        applyMatrix(ip, worldMatrix);
-        distance = Math.sqrt((ox - ip.x) * (ox - ip.x) + (oy - ip.y) * (oy - ip.y) + (oz - ip.z) * (oz - ip.z));
-        if (distance < minDistance) {
-          minDistance = distance;
-          minIndex = idx;
-        }
-      }
-    }
-
-    function applyMatrix(pt, e) {
-      var x = pt.x;
-      var y = pt.y;
-      var z = pt.z;
-      pt.x = e[0] * x + e[4] * y + e[8] * z + e[12];
-      pt.y = e[1] * x + e[5] * y + e[9] * z + e[13];
-      pt.z = e[2] * x + e[6] * y + e[10] * z + e[14];
-    }
-
-    function nearestTo(x, y, z) {
-      var directionDistance = (x - ox) * dx + (y - oy) * dy + (z - oz) * dz;
-      if (directionDistance < 0) {
-        pt.x = ox;
-        pt.y = oy;
-        pt.z = oz;
-      } else {
-        pt.x = dx * directionDistance + ox;
-        pt.y = dy * directionDistance + oy;
-        pt.z = dz * directionDistance + oz;
-      }
-      return pt;
-    }
-
-    function distanceTo(x, y, z) {
-      var directionDistance = (x - ox) * dx + (y - oy) * dy + (z - oz) * dz;
-      if (directionDistance < 0) {
-        // point behind ray
-        return Math.sqrt((ox - x) * (ox - x) + (oy - y) * (oy - y) + (oz - z) * (oz - z));
-      }
-      var vx = dx * directionDistance + ox;
-      var vy = dy * directionDistance + oy;
-      var vz = dz * directionDistance + oz;
-
-      return Math.sqrt((vx - x) * (vx - x) + (vy - y) * (vy - y) + (vz - z) * (vz - z));
-    }
-  }
-
-  function notifySelected(index) {
-    domMouse.nodeIndex = index;
-    api.fire('nodeover', domMouse);
-  }
-}
-
-},{"ngraph.events":19,"three":51}],9:[function(require,module,exports){
-var FlyControls = require('three.fly');
-var eventify = require('ngraph.events');
-var THREE = require('three');
-var createHitTest = require('./hitTest.js');
-
-module.exports = createInput;
-
-function createInput(camera, graph, domElement) {
-  var controls = new FlyControls(camera, domElement, THREE);
-  var hitTest = createHitTest(domElement);
-  // todo: this should all be based on graph size/options:
-  var totalNodes = graph.getNodesCount();
-  controls.movementSpeed =  Math.max(totalNodes * 0.1, 200);
-  controls.rollSpeed = 0.20;
-
-  var keyMap = Object.create(null);
-  var api = {
-    update: update,
-    onKey: onKey,
-    reset: reset,
-    adjustSpeed: adjustSpeed
-  };
-
-  eventify(api);
-
-  hitTest.on('nodeover', passthrough('nodeover'));
-  hitTest.on('nodeclick', passthrough('nodeclick'));
-  hitTest.on('nodedblclick', passthrough('nodedblclick'));
-
-  controls.on('move', inputChanged);
-  domElement.addEventListener('keydown', globalKeyHandler, false);
-  domElement.addEventListener('mousemove', globalMouseMove, false);
-
-  return api;
-
-  function adjustSpeed(sceneRadius) {
-    controls.movementSpeed = sceneRadius * 0.1;
-  }
-
-  function update() {
-    controls.update(0.1);
-  }
-
-  function passthrough(name) {
-    return function(e) {
-      api.fire(name, e);
-    };
-  }
-
-  function inputChanged(moveArg) {
-    api.fire('move', moveArg);
-    updateHitTest();
-  }
-
-  function onKey(keyName, handler) {
-    keyMap[keyName] = handler;
-  }
-
-  function globalKeyHandler(e) {
-    var handler = keyMap[e.which];
-    if (typeof handler === 'function') {
-      handler(e);
-    }
-  }
-
-  function globalMouseMove() {
-    updateHitTest();
-  }
-
-  function updateHitTest() {
-    var scene = camera.parent;
-    hitTest.update(scene, camera);
-  }
-
-  function reset() {
-    hitTest.reset();
-  }
-}
-
-},{"./hitTest.js":8,"ngraph.events":19,"three":51,"three.fly":49}],10:[function(require,module,exports){
-module.exports = intersect;
-
-/**
- * Find intersection point on a sphere surface with radius `r` and center in the `to`
- * with a ray [to, from)
- */
-function intersect(from, to, r) {
-  // we are using Cartesian to Spherical coordinates transformation to find
-  // theta and phi:
-  // https://en.wikipedia.org/wiki/Spherical_coordinate_system#Coordinate_system_conversions
-  var dx = from.x - to.x;
-  var dy = from.y - to.y;
-  var dz = from.z - to.z;
-  var r1 = Math.sqrt(dx * dx + dy * dy + dz * dz);
-  var teta = Math.acos(dz / r1);
-  var phi = Math.atan2(dy, dx);
-
-  // And then based on sphere radius we transform back to Cartesian:
-  return {
-    x: r * Math.sin(teta) * Math.cos(phi) + to.x,
-    y: r * Math.sin(teta) * Math.sin(phi) + to.y,
-    z: r * Math.cos(teta) + to.z
-  };
-}
-
-},{}],11:[function(require,module,exports){
-// This module allows to replace object properties with getters/setters,
-// so consumers can "connect" to them and be notified when properties are
-// updated.
-module.exports = makeActive;
-
-function makeActive(model) {
-  if (!model) throw new Error('Model is required to be an object');
-  if (typeof model.connect === 'function') throw new Error('connect() alread exists on model');
-  if (typeof model.disconnect === 'function') throw new Error('disconnect() alread exists on model');
-
-  var connected = new Map();
-
-  model.connect = connect;
-  model.disconnect = disconnect;
-
-  return model;
-
-  function replaceProperty(name) {
-    var propertyDescriptor = Object.getOwnPropertyDescriptor(model, name);
-    if (!propertyDescriptor) return false; // there is no such name!
-    if (propertyDescriptor && typeof propertyDescriptor.get === 'function') return true; // Already replaced
-
-    var value = model[name];
-
-    Object.defineProperty(model, name, {
-      get: function() { return value; },
-      set: function(v) {
-        value = v;
-        triggerListeners(name);
-      }
-    });
-
-    return true;
-  }
-
-  function triggerListeners(name) {
-    var myListeners = connected.get(name);
-    if (!myListeners) return;
-
-    myListeners.forEach(function(listener) {
-      listener(model);
-    });
-  }
-
-  function connect(key, cb) {
-    if (typeof key === 'string') {
-      connectSingleKey(key, cb);
-      return;
-    }
-
-    var query = key;
-
-    Object.keys(key).forEach(connectOneKey);
-
-    function connectOneKey(keyName) {
-      connectSingleKey(keyName, query[keyName]);
-    }
-  }
-
-  function connectSingleKey(key, cb) {
-    var parts = key.split('.');
-    var myListeners = connected.get(key);
-
-    if (!myListeners) {
-      var propertyCreated = replaceProperty(parts[0]);
-      if (!propertyCreated) {
-        console.error('trying to connect to property ' + parts[0] + ' that is not part of the model');
-        return;
-      }
-
-      myListeners = new Set();
-      connected.set(key, myListeners);
-    }
-
-    if (parts.length === 1) {
-      myListeners.add(cb);
-    } else {
-      // handling case for composite path. E.g.:
-      //  model.connect('from.position', cb)
-      // this means that consumer wants to be notified when from.position
-      // has changed
-      var connector = model[parts[0]];
-      var rest = parts.slice(1).join('.');
-
-      // remember the original function, so that we can find and delete it on disconnect
-      forwardModel.cb = cb;
-      myListeners.add(forwardModel);
-
-      // forward connection to request to property:
-      if (typeof connector.connect !== 'function') {
-        makeActive(connector);
-      }
-      connector.connect(rest, forwardModel);
-    }
-
-    function forwardModel(/* subModel */) {
-      // todo: this could probably use model from sub properties...
-      cb(model);
-    }
-  }
-
-  function disconnect(key, cb) {
-    if (typeof key === 'string') return deleteSingleKey(key, cb);
-
-    Object.keys(key).forEach(function(name) {
-      deleteSingleKey(name, key[name]);
-    });
-  }
-
-  function deleteSingleKey(key, cb) {
-    var myListeners = connected.get(key);
-    // todo: composite?
-    if (!myListeners) return;
-    if (myListeners.delete(cb)) return; // callback was succesfully deleted
-    // otherwise let's check if we are in composite mode:
-    var parts = key.split('.');
-    if (parts.length === 1) return; // no, we are not in composite, just have no such listener
-
-    // yes, we are in composite key. Need to iterate all subscribers to find
-    // which one is trying to disconnect
-    var found;
-    myListeners.forEach(function(subscriber) {
-      if (subscriber.cb === cb) {
-        found = subscriber;
-      }
-    });
-
-    if (found) {
-      // first delete it from our level of listeners
-      myListeners.delete(found);
-
-      // then forward disconnect request to the child models:
-      var connector = model[parts[0]];
-      var rest = parts.slice(1).join('.');
-      connector.disconnect(rest, found);
-    }
-  }
-}
-
-},{}],12:[function(require,module,exports){
-module.exports = [
-  'uniform vec3 color;',
-  'uniform sampler2D texture;',
-  '',
-  'varying vec3 vColor;',
-  '',
-  'void main() {',
-  '  gl_FragColor = vec4( color * vColor, 1.0 );',
-  '  vec4 tColor = texture2D( texture, gl_PointCoord );',
-  '  if (tColor.a < 0.5) discard;',
-  '  gl_FragColor = vec4(gl_FragColor.rgb * tColor.a, tColor.a);',
-  '}'
-].join('\n');
-
-},{}],13:[function(require,module,exports){
-module.exports = [
-'attribute float size;',
-'attribute vec3 customColor;',
-'',
-'varying vec3 vColor;',
-'',
-'void main() {',
-'  vColor = customColor / 255.0;',
-'  vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );',
-'  gl_PointSize = size * ( 351.0 / length( mvPosition.xyz ) );',
-'  gl_Position = projectionMatrix * mvPosition;',
-'}'
-].join('\n');
-
-},{}],14:[function(require,module,exports){
-var THREE = require('three');
-
-module.exports = nodeView;
-
-function nodeView(scene, options) {
-  var particleMaterial = require('./createMaterial.js')();
-  var total;
-  var nodes;
-  var colors, points, sizes;
-  var geometry, particleSystem;
-  var colorDirty, sizeDirty, positionDirty;
-
-  // declares bindings between node properties to functions within current view
-  var nodeConnector = {
-    position: position,
-    color: color,
-    size: size
-  };
-
-  return {
-    init: init,
-    update: update,
-    needsUpdate: needsUpdate,
-    getBoundingSphere: getBoundingSphere,
-    setNodePosition: position,
-    setNodeColor: color,
-    setNodeSize: size,
-    refresh: refresh
-  };
-
-  function needsUpdate() {
-    return colorDirty || sizeDirty || positionDirty;
-  }
-
-  function color(node) {
-    var idx3 = node.idx * 3;
-    var hexColor = node.color;
-    colors[idx3    ] = (hexColor >> 16) & 0xff;
-    colors[idx3 + 1] = (hexColor >>  8) & 0xff;
-    colors[idx3 + 2] = (hexColor      ) & 0xff;
-    colorDirty = true;
-  }
-
-  function size(node) {
-    sizes[node.idx] = node.size;
-    sizeDirty = true;
-  }
-
-  function position(node) {
-    var idx3 = node.idx * 3;
-    var pos = node.position;
-
-    points[idx3 + 0] = pos.x;
-    points[idx3 + 1] = pos.y;
-    points[idx3 + 2] = pos.z;
-
-    positionDirty = true;
-  }
-
-  function update() {
-    if (positionDirty) {
-      geometry.getAttribute('position').needsUpdate = true;
-      positionDirty = false;
-    }
-    if (colorDirty) {
-      geometry.getAttribute('customColor').needsUpdate = true;
-      colorDirty = false;
-    }
-    if (sizeDirty) {
-      geometry.getAttribute('size').needsUpdate = true;
-      sizeDirty = false;
-    }
-  }
-
-  function getBoundingSphere() {
-    if (!geometry) return;
-    geometry.computeBoundingSphere();
-    return geometry.boundingSphere;
-  }
-
-  function init(nodeCollection) {
-    disconnectOldNodes();
-
-    total = nodeCollection.length;
-    nodes = nodeCollection;
-    // if we can ruse old arrays - do it! No need to stress the GC
-    var pointsInitialized = points !== undefined && points.length === total * 3;
-    if (!pointsInitialized) points = new Float32Array(total * 3);
-    var colorsInitialized = colors !== undefined && colors.length === total * 3;
-    if (!colorsInitialized) colors = new Float32Array(total * 3);
-    var sizesInitialized = sizes !== undefined && sizes.length === total;
-    if (!sizesInitialized) sizes = new Float32Array(total);
-
-    geometry = new THREE.BufferGeometry();
-
-    geometry.addAttribute('position', new THREE.BufferAttribute(points, 3));
-    geometry.addAttribute('customColor', new THREE.BufferAttribute(colors, 3));
-    geometry.addAttribute('size', new THREE.BufferAttribute(sizes, 1));
-
-    if (particleSystem) {
-      scene.remove(particleSystem);
-    }
-
-    particleSystem = new THREE.Points(geometry, particleMaterial);
-    particleSystem.name = 'nodes';
-    particleSystem.frustumCulled = false;
-
-    scene.add(particleSystem);
-
-    for (var i = 0; i < total; ++i) {
-      var node = nodes[i];
-      // first make sure any update to underlying node properties result in
-      // graph update:
-      if (options.activeNode) node.connect(nodeConnector);
-    }
-
-    refresh();
-  }
-
-  /**
-   * Forces renderer to refresh positions/colors/sizes for each model.
-   */
-  function refresh() {
-    for (var i = 0; i < total; ++i) {
-      var node = nodes[i];
-      position(node);
-      color(node);
-      size(node);
-    }
-  }
-
-  function disconnectOldNodes() {
-    if (!nodes) return;
-    if (!options.activeNode) return;
-
-    for (var i = 0; i < nodes.length; ++i) {
-      nodes[i].disconnect(nodeConnector);
-    }
-  }
-}
-
-},{"./createMaterial.js":4,"three":51}],15:[function(require,module,exports){
+},{"../../lib/recurseBFngraph":2,"../../lib/threeGraphics":3,"ngraph.events":4,"ngraph.graph":13,"ngraph.three":32,"three":35}],2:[function(require,module,exports){
 // ----------- Lib ---------------
 
 var eventify = require('ngraph.events');
@@ -1581,139 +186,67 @@ module.exports = {
   hashCode,
   intToRGB,
 };
-},{"ngraph.events":19}],16:[function(require,module,exports){
+},{"ngraph.events":4}],3:[function(require,module,exports){
 /**
- * manages view for tooltips shown when user hover over a node
+ * This module provides default settings for three.js graphics. There are a lot
+ * of possible configuration parameters, and this file provides reasonable defaults
  */
-module.exports = createTooltipView;
+var THREE = require('three');
 
-var tooltipStyle = require('../style/style.js');
-var insertCSS = require('insert-css');
+/**
+ * Default node UI creator. Renders a cube
+ */
+module.exports.createNodeUI = createNodeUI;
 
-var elementClass = require('element-class');
+/**
+ * Default link UI creator. Renders a line
+ **/
+module.exports.createLinkUI = createLinkUI;
 
-function createTooltipView(container) {
-  insertCSS(tooltipStyle);
+/**
+ * Updates cube position
+ */
+module.exports.nodeRenderer = nodeRenderer;
 
-  var view = {
-    show: show,
-    hide: hide
-  };
+/**
+ * Updates line position
+ */
+module.exports.linkRenderer = linkRenderer;
 
-  var tooltipDom, tooltipVisible;
+var NODE_SIZE = 2; // default size of a node square
 
-  return view;
 
-  function show(e, node) {
-    if (!tooltipDom) createTooltip();
-
-    tooltipDom.style.left = e.x + 'px';
-    tooltipDom.style.top = e.y + 'px';
-    tooltipDom.innerHTML = node.id;
-    tooltipVisible = true;
-  }
-
-  function hide() {
-    if (tooltipVisible) {
-      tooltipDom.style.left = '-10000px';
-      tooltipDom.style.top = '-10000px';
-      tooltipVisible = false;
-    }
-  }
-
-  function createTooltip() {
-    tooltipDom = document.createElement('div');
-    elementClass(tooltipDom).add('ngraph-tooltip');
-    container.appendChild(tooltipDom);
-  }
+function createNodeUI(node) {
+  var nodeMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+  var nodeGeometry = new THREE.BoxGeometry(NODE_SIZE, NODE_SIZE, NODE_SIZE);
+  return new THREE.Mesh(nodeGeometry, nodeMaterial);
 }
 
-},{"../style/style.js":53,"element-class":17,"insert-css":18}],17:[function(require,module,exports){
-module.exports = function(opts) {
-  return new ElementClass(opts)
+function createLinkUI(link) {
+  var linkGeometry = new THREE.Geometry();
+  // we don't care about position here. linkRenderer will update it
+  linkGeometry.vertices.push(new THREE.Vector3(0, 0, 0));
+  linkGeometry.vertices.push(new THREE.Vector3(0, 0, 0));
+
+  var linkMaterial = new THREE.LineBasicMaterial({ color: 0x00cccc });
+  return new THREE.Line(linkGeometry, linkMaterial);
 }
 
-function indexOf(arr, prop) {
-  if (arr.indexOf) return arr.indexOf(prop)
-  for (var i = 0, len = arr.length; i < len; i++)
-    if (arr[i] === prop) return i
-  return -1
+function nodeRenderer(node) {
+  node.position.x = node.pos.x;
+  node.position.y = node.pos.y;
+  node.position.z = node.pos.z;
 }
 
-function ElementClass(opts) {
-  if (!(this instanceof ElementClass)) return new ElementClass(opts)
-  var self = this
-  if (!opts) opts = {}
-
-  // similar doing instanceof HTMLElement but works in IE8
-  if (opts.nodeType) opts = {el: opts}
-
-  this.opts = opts
-  this.el = opts.el || document.body
-  if (typeof this.el !== 'object') this.el = document.querySelector(this.el)
+function linkRenderer(link) {
+  var from = link.from;
+  var to = link.to;
+  link.geometry.vertices[0].set(from.x, from.y, from.z);
+  link.geometry.vertices[1].set(to.x, to.y, to.z);
+  link.geometry.verticesNeedUpdate = true;
 }
 
-ElementClass.prototype.add = function(className) {
-  var el = this.el
-  if (!el) return
-  if (el.className === "") return el.className = className
-  var classes = el.className.split(' ')
-  if (indexOf(classes, className) > -1) return classes
-  classes.push(className)
-  el.className = classes.join(' ')
-  return classes
-}
-
-ElementClass.prototype.remove = function(className) {
-  var el = this.el
-  if (!el) return
-  if (el.className === "") return
-  var classes = el.className.split(' ')
-  var idx = indexOf(classes, className)
-  if (idx > -1) classes.splice(idx, 1)
-  el.className = classes.join(' ')
-  return classes
-}
-
-ElementClass.prototype.has = function(className) {
-  var el = this.el
-  if (!el) return
-  var classes = el.className.split(' ')
-  return indexOf(classes, className) > -1
-}
-
-ElementClass.prototype.toggle = function(className) {
-  var el = this.el
-  if (!el) return
-  if (this.has(className)) this.remove(className)
-  else this.add(className)
-}
-
-},{}],18:[function(require,module,exports){
-var inserted = {};
-
-module.exports = function (css, options) {
-    if (inserted[css]) return;
-    inserted[css] = true;
-    
-    var elem = document.createElement('style');
-    elem.setAttribute('type', 'text/css');
-
-    if ('textContent' in elem) {
-      elem.textContent = css;
-    } else {
-      elem.styleSheet.cssText = css;
-    }
-    
-    var head = document.getElementsByTagName('head')[0];
-    if (options && options.prepend) {
-        head.insertBefore(elem, head.childNodes[0]);
-    } else {
-        head.appendChild(elem);
-    }
-};
-
-},{}],19:[function(require,module,exports){
+},{"three":35}],4:[function(require,module,exports){
 module.exports = function(subject) {
   validateSubject(subject);
 
@@ -1803,7 +336,7 @@ function validateSubject(subject) {
   }
 }
 
-},{}],20:[function(require,module,exports){
+},{}],5:[function(require,module,exports){
 module.exports = exposeProperties;
 
 /**
@@ -1849,7 +382,7 @@ function augment(source, target, key) {
   }
 }
 
-},{}],21:[function(require,module,exports){
+},{}],6:[function(require,module,exports){
 module.exports = createLayout;
 module.exports.simulator = require('ngraph.physics.simulator');
 
@@ -2164,7 +697,7 @@ function createLayout(graph, physicsSettings) {
 
 function noop() { }
 
-},{"ngraph.events":19,"ngraph.physics.simulator":31}],22:[function(require,module,exports){
+},{"ngraph.events":4,"ngraph.physics.simulator":16}],7:[function(require,module,exports){
 /**
  * This module provides all required forces to regular ngraph.physics.simulator
  * to make it 3D simulator. Ideally ngraph.physics.simulator should operate
@@ -2188,7 +721,7 @@ function createLayout(graph, physicsSettings) {
   return createLayout.get2dLayout(graph, physicsSettings);
 }
 
-},{"./lib/bounds":23,"./lib/createBody":24,"./lib/dragForce":25,"./lib/eulerIntegrator":26,"./lib/springForce":27,"ngraph.forcelayout":21,"ngraph.merge":29,"ngraph.quadtreebh3d":42}],23:[function(require,module,exports){
+},{"./lib/bounds":8,"./lib/createBody":9,"./lib/dragForce":10,"./lib/eulerIntegrator":11,"./lib/springForce":12,"ngraph.forcelayout":6,"ngraph.merge":14,"ngraph.quadtreebh3d":27}],8:[function(require,module,exports){
 module.exports = function (bodies, settings) {
   var random = require('ngraph.random').random(42);
   var boundingBox =  { x1: 0, y1: 0, z1: 0, x2: 0, y2: 0, z2: 0 };
@@ -2287,14 +820,14 @@ module.exports = function (bodies, settings) {
   }
 };
 
-},{"ngraph.random":46}],24:[function(require,module,exports){
+},{"ngraph.random":31}],9:[function(require,module,exports){
 var physics = require('ngraph.physics.primitives');
 
 module.exports = function(pos) {
   return new physics.Body3d(pos);
 }
 
-},{"ngraph.physics.primitives":30}],25:[function(require,module,exports){
+},{"ngraph.physics.primitives":15}],10:[function(require,module,exports){
 /**
  * Represents 3d drag force, which reduces force value on each step by given
  * coefficient.
@@ -2324,7 +857,7 @@ module.exports = function (options) {
   return api;
 };
 
-},{"ngraph.expose":20,"ngraph.merge":29}],26:[function(require,module,exports){
+},{"ngraph.expose":5,"ngraph.merge":14}],11:[function(require,module,exports){
 /**
  * Performs 3d forces integration, using given timestep. Uses Euler method to solve
  * differential equation (http://en.wikipedia.org/wiki/Euler_method ).
@@ -2374,7 +907,7 @@ function integrate(bodies, timeStep) {
   return (tx * tx + ty * ty + tz * tz)/bodies.length;
 }
 
-},{}],27:[function(require,module,exports){
+},{}],12:[function(require,module,exports){
 /**
  * Represents 3d spring force, which updates forces acting on two bodies, conntected
  * by a spring.
@@ -2430,7 +963,7 @@ module.exports = function (options) {
   return api;
 }
 
-},{"ngraph.expose":20,"ngraph.merge":29,"ngraph.random":46}],28:[function(require,module,exports){
+},{"ngraph.expose":5,"ngraph.merge":14,"ngraph.random":31}],13:[function(require,module,exports){
 /**
  * @fileOverview Contains definition of the core graph object.
  */
@@ -3009,7 +1542,7 @@ function makeLinkId(fromId, toId) {
   return hashCode(fromId.toString() + '👉 ' + toId.toString());
 }
 
-},{"ngraph.events":19}],29:[function(require,module,exports){
+},{"ngraph.events":4}],14:[function(require,module,exports){
 module.exports = merge;
 
 /**
@@ -3042,7 +1575,7 @@ function merge(target, options) {
   return target;
 }
 
-},{}],30:[function(require,module,exports){
+},{}],15:[function(require,module,exports){
 module.exports = {
   Body: Body,
   Vector2d: Vector2d,
@@ -3109,7 +1642,7 @@ Vector3d.prototype.reset = function () {
   this.x = this.y = this.z = 0;
 };
 
-},{}],31:[function(require,module,exports){
+},{}],16:[function(require,module,exports){
 /**
  * Manages a simulation of physical forces acting on bodies and springs.
  */
@@ -3387,7 +1920,7 @@ function physicsSimulator(settings) {
   }
 };
 
-},{"./lib/bounds":32,"./lib/createBody":33,"./lib/dragForce":34,"./lib/eulerIntegrator":35,"./lib/spring":36,"./lib/springForce":37,"ngraph.events":19,"ngraph.expose":20,"ngraph.merge":29,"ngraph.quadtreebh":38}],32:[function(require,module,exports){
+},{"./lib/bounds":17,"./lib/createBody":18,"./lib/dragForce":19,"./lib/eulerIntegrator":20,"./lib/spring":21,"./lib/springForce":22,"ngraph.events":4,"ngraph.expose":5,"ngraph.merge":14,"ngraph.quadtreebh":23}],17:[function(require,module,exports){
 module.exports = function (bodies, settings) {
   var random = require('ngraph.random').random(42);
   var boundingBox =  { x1: 0, y1: 0, x2: 0, y2: 0 };
@@ -3469,14 +2002,14 @@ module.exports = function (bodies, settings) {
   }
 }
 
-},{"ngraph.random":46}],33:[function(require,module,exports){
+},{"ngraph.random":31}],18:[function(require,module,exports){
 var physics = require('ngraph.physics.primitives');
 
 module.exports = function(pos) {
   return new physics.Body(pos);
 }
 
-},{"ngraph.physics.primitives":30}],34:[function(require,module,exports){
+},{"ngraph.physics.primitives":15}],19:[function(require,module,exports){
 /**
  * Represents drag force, which reduces force value on each step by given
  * coefficient.
@@ -3505,7 +2038,7 @@ module.exports = function (options) {
   return api;
 };
 
-},{"ngraph.expose":20,"ngraph.merge":29}],35:[function(require,module,exports){
+},{"ngraph.expose":5,"ngraph.merge":14}],20:[function(require,module,exports){
 /**
  * Performs forces integration, using given timestep. Uses Euler method to solve
  * differential equation (http://en.wikipedia.org/wiki/Euler_method ).
@@ -3552,7 +2085,7 @@ function integrate(bodies, timeStep) {
   return (tx * tx + ty * ty)/max;
 }
 
-},{}],36:[function(require,module,exports){
+},{}],21:[function(require,module,exports){
 module.exports = Spring;
 
 /**
@@ -3568,7 +2101,7 @@ function Spring(fromBody, toBody, length, coeff, weight) {
     this.weight = typeof weight === 'number' ? weight : 1;
 };
 
-},{}],37:[function(require,module,exports){
+},{}],22:[function(require,module,exports){
 /**
  * Represents spring force, which updates forces acting on two bodies, conntected
  * by a spring.
@@ -3620,7 +2153,7 @@ module.exports = function (options) {
   return api;
 }
 
-},{"ngraph.expose":20,"ngraph.merge":29,"ngraph.random":46}],38:[function(require,module,exports){
+},{"ngraph.expose":5,"ngraph.merge":14,"ngraph.random":31}],23:[function(require,module,exports){
 /**
  * This is Barnes Hut simulation algorithm for 2d case. Implementation
  * is highly optimized (avoids recusion and gc pressure)
@@ -3946,7 +2479,7 @@ function setChild(node, idx, child) {
   else if (idx === 3) node.quad3 = child;
 }
 
-},{"./insertStack":39,"./isSamePosition":40,"./node":41,"ngraph.random":46}],39:[function(require,module,exports){
+},{"./insertStack":24,"./isSamePosition":25,"./node":26,"ngraph.random":31}],24:[function(require,module,exports){
 module.exports = InsertStack;
 
 /**
@@ -3990,7 +2523,7 @@ function InsertStackElement(node, body) {
     this.body = body; // physical body which needs to be inserted to node
 }
 
-},{}],40:[function(require,module,exports){
+},{}],25:[function(require,module,exports){
 module.exports = function isSamePosition(point1, point2) {
     var dx = Math.abs(point1.x - point2.x);
     var dy = Math.abs(point1.y - point2.y);
@@ -3998,7 +2531,7 @@ module.exports = function isSamePosition(point1, point2) {
     return (dx < 1e-8 && dy < 1e-8);
 };
 
-},{}],41:[function(require,module,exports){
+},{}],26:[function(require,module,exports){
 /**
  * Internal data structure to represent 2D QuadTree node
  */
@@ -4030,7 +2563,7 @@ module.exports = function Node() {
   this.right = 0;
 };
 
-},{}],42:[function(require,module,exports){
+},{}],27:[function(require,module,exports){
 /**
  * This is Barnes Hut simulation algorithm for 3d case. Implementation
  * is highly optimized (avoids recusion and gc pressure)
@@ -4425,7 +2958,7 @@ function setChild(node, idx, child) {
   else if (idx === 7) node.quad7 = child;
 }
 
-},{"./insertStack":43,"./isSamePosition":44,"./node":45,"ngraph.random":46}],43:[function(require,module,exports){
+},{"./insertStack":28,"./isSamePosition":29,"./node":30,"ngraph.random":31}],28:[function(require,module,exports){
 module.exports = InsertStack;
 
 /**
@@ -4469,7 +3002,7 @@ function InsertStackElement(node, body) {
     this.body = body; // physical body which needs to be inserted to node
 }
 
-},{}],44:[function(require,module,exports){
+},{}],29:[function(require,module,exports){
 module.exports = function isSamePosition(point1, point2) {
     var dx = Math.abs(point1.x - point2.x);
     var dy = Math.abs(point1.y - point2.y);
@@ -4478,7 +3011,7 @@ module.exports = function isSamePosition(point1, point2) {
     return (dx < 1e-8 && dy < 1e-8 && dz < 1e-8);
 };
 
-},{}],45:[function(require,module,exports){
+},{}],30:[function(require,module,exports){
 /**
  * Internal data structure to represent 3D QuadTree node
  */
@@ -4522,7 +3055,7 @@ module.exports = function Node() {
   this.back = 0;
 };
 
-},{}],46:[function(require,module,exports){
+},{}],31:[function(require,module,exports){
 module.exports = {
   random: random,
   randomIterator: randomIterator
@@ -4609,530 +3142,1064 @@ function randomIterator(array, customRandom) {
     };
 }
 
-},{}],47:[function(require,module,exports){
-/**
- * Creates a force based layout that can be switched between 3d and 2d modes
- * Layout is used by ngraph.pixel
- *
- * @param {ngraph.graph} graph instance that needs to be laid out
- * @param {object} options - configures current layout.
- * @returns {ojbect} api to operate with current layout. Only two methods required
- * to exist by ngraph.pixel: `step()` and `getNodePosition()`.
- */
-var eventify = require('ngraph.events');
-var layout3d = require('ngraph.forcelayout3d');
-var layout2d = layout3d.get2dLayout;
+},{}],32:[function(require,module,exports){
+var THREE = require('three');
 
-module.exports = createLayout;
+module.exports = function (graph, settings) {
+  var merge = require('ngraph.merge');
+  settings = merge(settings, {
+    interactive: true
+  });
 
-function createLayout(graph, options) {
-  options = options || {};
+  var beforeFrameRender;
+  var isStable = false;
+  var disposed = false;
+  var layout = createLayout(settings);
+  var renderer = createRenderer(settings);
+  var camera = createCamera(settings);
+  var scene = settings.scene || new THREE.Scene();
+
+  var defaults = require('./lib/defaults');
+
+  // Default callbacks to build/render nodes and links
+  var nodeUIBuilder, nodeRenderer, linkUIBuilder, linkRenderer;
+
+  var nodeUI, linkUI; // Storage for UI of nodes/links
+  var controls = { update: function noop() {} };
+
+  var graphics = {
+    THREE: THREE, // expose THREE so that clients will not have to require it twice.
+    run: run,
+    renderOneFrame: renderOneFrame,
+
+    onFrame: onFrame,
+
+    /**
+     * Gets UI object for a given node id
+     */
+    getNodeUI : function (nodeId) {
+      return nodeUI[nodeId];
+    },
+
+    getLinkUI: function (linkId) {
+      return linkUI[linkId];
+    },
+
+    /**
+     * This callback creates new UI for a graph node. This becomes helpful
+     * when you want to precalculate some properties, which otherwise could be
+     * expensive during rendering frame.
+     *
+     * @callback createNodeUICallback
+     * @param {object} node - graph node for which UI is required.
+     * @returns {object} arbitrary object which will be later passed to renderNode
+     */
+    /**
+     * This function allows clients to pass custom node UI creation callback
+     *
+     * @param {createNodeUICallback} createNodeUICallback - The callback that
+     * creates new node UI
+     * @returns {object} this for chaining.
+     */
+    createNodeUI : function (createNodeUICallback) {
+      nodeUIBuilder = createNodeUICallback;
+      rebuildUI();
+      return this;
+    },
+
+
+    /**
+     * Force a rebuild of the UI. This might be necessary after settings have changed
+     */
+    rebuild : function () {
+      rebuildUI();
+    },
+
+    /**
+     * This callback is called by graphics when it wants to render node on
+     * a screen.
+     *
+     * @callback renderNodeCallback
+     * @param {object} node - result of createNodeUICallback(). It contains anything
+     * you'd need to render a node
+     */
+    /**
+     * Allows clients to pass custom node rendering callback
+     *
+     * @param {renderNodeCallback} renderNodeCallback - Callback which renders
+     * node.
+     *
+     * @returns {object} this for chaining.
+     */
+    renderNode: function (renderNodeCallback) {
+      nodeRenderer = renderNodeCallback;
+      return this;
+    },
+
+    /**
+     * This callback creates new UI for a graph link. This becomes helpful
+     * when you want to precalculate some properties, which otherwise could be
+     * expensive during rendering frame.
+     *
+     * @callback createLinkUICallback
+     * @param {object} link - graph link for which UI is required.
+     * @returns {object} arbitrary object which will be later passed to renderNode
+     */
+    /**
+     * This function allows clients to pass custom node UI creation callback
+     *
+     * @param {createLinkUICallback} createLinkUICallback - The callback that
+     * creates new link UI
+     * @returns {object} this for chaining.
+     */
+    createLinkUI : function (createLinkUICallback) {
+      linkUIBuilder = createLinkUICallback;
+      rebuildUI();
+      return this;
+    },
+
+    /**
+     * This callback is called by graphics when it wants to render link on
+     * a screen.
+     *
+     * @callback renderLinkCallback
+     * @param {object} link - result of createLinkUICallback(). It contains anything
+     * you'd need to render a link
+     */
+    /**
+     * Allows clients to pass custom link rendering callback
+     *
+     * @param {renderLinkCallback} renderLinkCallback - Callback which renders
+     * link.
+     *
+     * @returns {object} this for chaining.
+     */
+    renderLink: function (renderLinkCallback) {
+      linkRenderer = renderLinkCallback;
+      return this;
+    },
+
+    /**
+     * Exposes the resetStable method.
+     * This is useful if you want to allow users to update the physics settings of your layout interactively
+     */
+    resetStable: resetStable,
 
   /**
-   * Should the graph be rendered in 3d space? True by default
-   */
-  options.is3d = options.is3d === undefined ? true : options.is3d;
-
-  var is3d = options.is3d;
-  var layout = is3d ? layout3d(graph, options.physics) : layout2d(graph, options.physics);
-
-  var api = {
-    ////////////////////////////////////////////////////////////////////////////
-    // The following two methods are required by ngraph.pixel to be implemented
-    // by all layout providers
-    ////////////////////////////////////////////////////////////////////////////
-
-    /**
-     * Called by `ngraph.pixel` to perform one step. Required to be provided by
-     * all layout interfaces.
+     * Stops animation and deallocates all allocated resources
      */
-    step: layout.step,
+    dispose: dispose,
 
-    /**
-     * Gets position of a given node by its identifier. Required.
-     *
-     * @param {string} nodeId identifier of a node in question.
-     * @returns {object} {x: number, y: number, z: number} coordinates of a node.
-     */
-    getNodePosition: layout.getNodePosition,
-
-    ////////////////////////////////////////////////////////////////////////////
-    // Methods below are not required by ngraph.pixel, and are specific to the
-    // current layout implementation
-    ////////////////////////////////////////////////////////////////////////////
-
-    /**
-     * Sets position for a given node by its identifier.
-     *
-     * @param {string} nodeId identifier of a node that we want to modify
-     * @param {number} x coordinate of a node
-     * @param {number} y coordinate of a node
-     * @param {number} z coordinate of a node
-     */
-    setNodePosition: layout.setNodePosition,
-
-    /**
-     * Toggle rendering mode between 2d and 3d.
-     *
-     * @param {boolean+} newMode if set to true, the renderer will switch to 3d
-     * rendering mode. If set to false, the renderer will switch to 2d mode.
-     * Finally if this argument is not defined, then current rendering mode is
-     * returned.
-     */
-    is3d: mode3d,
-
-    /**
-     * Gets force based simulator of the current layout
-     */
-    simulator: layout.simulator,
-
-    /**
-     * Toggle node pinning. If node is pinned the layout algorithm is not allowed
-     * to change its position.
-     *
-     * @param {string} nodeId identifier of a node to work with;
-     * @param {boolean+} isPinned if specified then the `nodeId` pinning attribute
-     * is set to the to the value of this argument; Otherwise this method returns
-     * current pinning mode of the node.
-     */
-    pinNode: pinNode
+    // expose properties
+    renderer: renderer,
+    camera: camera,
+    scene: scene,
+    layout: layout
   };
 
-  eventify(api);
+  initialize();
 
-  return api;
+  return graphics;
 
-  function mode3d(newMode) {
-    if (newMode === undefined) {
-      return is3d;
-    }
-    if (newMode !== is3d) {
-      toggleLayout();
-    }
-    return api;
+  function onFrame(cb) {
+    // todo: allow multiple callbacks
+    beforeFrameRender = cb;
   }
 
-  function toggleLayout() {
-    var idx = 0;
-    var oldLayout = layout;
-    layout.dispose();
-    is3d = !is3d;
-    var physics = copyPhysicsSettings(layout.simulator);
+  function initialize() {
+    nodeUIBuilder = defaults.createNodeUI;
+    nodeRenderer  = defaults.nodeRenderer;
+    linkUIBuilder = defaults.createLinkUI;
+    linkRenderer  = defaults.linkRenderer;
+    nodeUI = {}; linkUI = {}; // Storage for UI of nodes/links
 
-    if (is3d) {
-      layout = layout3d(graph, physics);
+    graph.forEachLink(initLink);
+    graph.forEachNode(initNode);
+
+    graph.on('changed', onGraphChanged);
+
+    if (settings.interactive) createControls();
+  }
+
+  function run() {
+    if (disposed) return;
+
+    requestAnimationFrame(run);
+    if (!isStable) {
+      isStable = layout.step();
+    }
+    controls.update();
+    renderOneFrame();
+  }
+
+  function dispose(options) {
+    // let clients selectively choose what to dispose
+    disposed = true;
+    options = merge(options, {
+      layout: true,
+      dom: true,
+      scene: true
+    });
+
+    beforeFrameRender = null;
+
+    graph.off('changed', onGraphChanged);
+    if (options.layout) layout.dispose();
+    if (options.scene) {
+      scene.traverse(function (object) {
+        if (typeof object.deallocate === 'function') {
+          object.deallocate();
+        }
+        disposeThreeObject(object.geometry);
+        disposeThreeObject(object.material);
+      });
+    }
+
+    if (options.dom) {
+      var domElement = renderer.domElement;
+      if(domElement && domElement.parentNode) {
+        domElement.parentNode.removeChild(domElement);
+      }
+    }
+
+    if (settings.interactive) {
+      controls.removeEventListener('change', renderOneFrame);
+      controls.dispose();
+    }
+  }
+
+  function disposeThreeObject(obj) {
+    if (!obj) return;
+
+    if (obj.deallocate === 'function') {
+      obj.deallocate();
+    }
+    if (obj.dispose === 'function') {
+      obj.dispose();
+    }
+  }
+
+  function renderOneFrame() {
+    if (beforeFrameRender) {
+      beforeFrameRender();
+    }
+    // todo: this adds GC pressure. Remove functional iterators
+    Object.keys(linkUI).forEach(renderLink);
+    Object.keys(nodeUI).forEach(renderNode);
+    renderer.render(scene, camera);
+  }
+
+  function renderNode(nodeId) {
+    nodeRenderer(nodeUI[nodeId]);
+  }
+
+  function renderLink(linkId) {
+    linkRenderer(linkUI[linkId]);
+  }
+
+  function initNode(node) {
+    var ui = nodeUIBuilder(node);
+    if (!ui) return;
+    // augment it with position data:
+    ui.pos = layout.getNodePosition(node.id);
+    // and store for subsequent use:
+    nodeUI[node.id] = ui;
+
+    scene.add(ui);
+  }
+
+  function initLink(link) {
+    var ui = linkUIBuilder(link);
+    if (!ui) return;
+
+    ui.from = layout.getNodePosition(link.fromId);
+    ui.to = layout.getNodePosition(link.toId);
+
+    linkUI[link.id] = ui;
+    scene.add(ui);
+  }
+
+  function onGraphChanged(changes) {
+    resetStable();
+    for (var i = 0; i < changes.length; ++i) {
+      var change = changes[i];
+      if (change.changeType === 'add') {
+        if (change.node) {
+          initNode(change.node);
+        }
+        if (change.link) {
+          initLink(change.link);
+        }
+      } else if (change.changeType === 'remove') {
+        if (change.node) {
+          var node = nodeUI[change.node.id];
+          if (node) { scene.remove(node); }
+          delete nodeUI[change.node.id];
+        }
+        if (change.link) {
+          var link = linkUI[change.link.id];
+          if (link) { scene.remove(link); }
+          delete linkUI[change.link.id];
+        }
+      }
+    }
+  }
+
+  function resetStable() {
+    isStable = false;
+  }
+
+  function createLayout(settings) {
+    if (settings.layout) {
+      return settings.layout; // user has its own layout algorithm. Use it;
+    }
+
+    // otherwise let's create a default force directed layout:
+    return require('ngraph.forcelayout3d')(graph, settings.physicsSettings);
+  }
+
+  function createRenderer(settings) {
+    if (settings.renderer) {
+      return settings.renderer;
+    }
+
+    var isWebGlSupported = ( function () { try { var canvas = document.createElement( 'canvas' ); return !! window.WebGLRenderingContext && ( canvas.getContext( 'webgl' ) || canvas.getContext( 'experimental-webgl' ) ); } catch( e ) { return false; } } )();
+    var renderer = isWebGlSupported ? new THREE.WebGLRenderer(settings) : new THREE.CanvasRenderer(settings);
+    var width, height;
+    if (settings.container) {
+      width = settings.container.clientWidth;
+      height = settings.container.clientHeight;
     } else {
-      layout = layout2d(graph, physics);
+      width = window.innerWidth;
+      height = window.innerHeight;
     }
-    graph.forEachNode(initLayout);
-    api.step = layout.step;
-    api.setNodePosition = layout.setNodePosition;
-    api.getNodePosition = layout.getNodePosition;
-    api.simulator = layout.simulator;
+    renderer.setSize(width, height);
 
-    api.fire('reset');
-
-    function initLayout(node) {
-      var pos = oldLayout.getNodePosition(node.id);
-      // we need to bump 3d positions, so that forces are disturbed:
-      if (is3d) pos.z = (idx % 2 === 0) ? -1 : 1;
-      else pos.z = 0;
-      layout.setNodePosition(node.id, pos.x, pos.y, pos.z);
-      idx += 1;
+    if (settings.container) {
+      settings.container.appendChild(renderer.domElement);
+    } else {
+      document.body.appendChild(renderer.domElement);
     }
+
+    return renderer;
   }
 
-  function pinNode(nodeId, isPinned) {
-    var node = graph.getNode(nodeId);
-    if (!node) throw new Error('Could not find node in the graph. Node Id: ' + nodeId);
-    if (isPinned === undefined) {
-      return layout.isNodePinned(node);
+  function createCamera(settings) {
+    if (settings.camera) {
+      return settings.camera;
     }
-    layout.pinNode(node, isPinned);
+    var container = renderer.domElement;
+    var camera = new THREE.PerspectiveCamera(75, container.clientWidth/container.clientHeight, 0.1, 3000);
+    camera.position.z = 400;
+    return camera;
   }
 
-  function copyPhysicsSettings(simulator) {
-    return {
-      springLength: simulator.springLength(),
-      springCoeff: simulator.springCoeff(),
-      gravity: simulator.gravity(),
-      theta: simulator.theta(),
-      dragCoeff: simulator.dragCoeff(),
-      timeStep: simulator.timeStep()
-    };
+  function createControls() {
+    var Controls = require('three.trackball');
+    controls = new Controls(camera, renderer.domElement);
+    controls.panSpeed = 0.8;
+    controls.staticMoving = true;
+    controls.dynamicDampingFactor = 0.3;
+    controls.addEventListener('change', renderOneFrame);
+    graphics.controls = controls;
   }
+
+  function rebuildUI() {
+    Object.keys(nodeUI).forEach(function (nodeId) {
+      scene.remove(nodeUI[nodeId]);
+    });
+    nodeUI = {};
+
+    Object.keys(linkUI).forEach(function (linkId) {
+      scene.remove(linkUI[linkId]);
+    });
+    linkUI = {};
+
+    graph.forEachLink(initLink);
+    graph.forEachNode(initNode);
+  }
+};
+
+},{"./lib/defaults":33,"ngraph.forcelayout3d":7,"ngraph.merge":14,"three":35,"three.trackball":34}],33:[function(require,module,exports){
+/**
+ * This module provides default settings for three.js graphics. There are a lot
+ * of possible configuration parameters, and this file provides reasonable defaults
+ */
+var THREE = require('three');
+
+/**
+ * Default node UI creator. Renders a cube
+ */
+module.exports.createNodeUI = createNodeUI;
+
+/**
+ * Default link UI creator. Renders a line
+ **/
+module.exports.createLinkUI = createLinkUI;
+
+/**
+ * Updates cube position
+ */
+module.exports.nodeRenderer = nodeRenderer;
+
+/**
+ * Updates line position
+ */
+module.exports.linkRenderer = linkRenderer;
+
+var NODE_SIZE = 2; // default size of a node square
+
+
+function createNodeUI(node) {
+  var nodeMaterial = new THREE.MeshBasicMaterial({ color: 0xfefefe });
+  var nodeGeometry = new THREE.BoxGeometry(NODE_SIZE, NODE_SIZE, NODE_SIZE);
+  return new THREE.Mesh(nodeGeometry, nodeMaterial);
 }
 
-},{"ngraph.events":19,"ngraph.forcelayout3d":22}],48:[function(require,module,exports){
-/*!
-	query-string
-	Parse and stringify URL query strings
-	https://github.com/sindresorhus/query-string
-	by Sindre Sorhus
-	MIT License
-*/
-(function () {
-	'use strict';
-	var queryString = {};
+function createLinkUI(link) {
+  var linkGeometry = new THREE.Geometry();
+  // we don't care about position here. linkRenderer will update it
+  linkGeometry.vertices.push(new THREE.Vector3(0, 0, 0));
+  linkGeometry.vertices.push(new THREE.Vector3(0, 0, 0));
 
-	queryString.parse = function (str) {
-		if (typeof str !== 'string') {
-			return {};
-		}
+  var linkMaterial = new THREE.LineBasicMaterial({ color: 0x00cccc });
+  return new THREE.Line(linkGeometry, linkMaterial);
+}
 
-		str = str.trim().replace(/^(\?|#)/, '');
+function nodeRenderer(node) {
+  node.position.x = node.pos.x;
+  node.position.y = node.pos.y;
+  node.position.z = node.pos.z;
+}
 
-		if (!str) {
-			return {};
-		}
+function linkRenderer(link) {
+  var from = link.from;
+  var to = link.to;
+  link.geometry.vertices[0].set(from.x, from.y, from.z);
+  link.geometry.vertices[1].set(to.x, to.y, to.z);
+  link.geometry.verticesNeedUpdate = true;
+}
 
-		return str.trim().split('&').reduce(function (ret, param) {
-			var parts = param.replace(/\+/g, ' ').split('=');
-			var key = parts[0];
-			var val = parts[1];
-
-			key = decodeURIComponent(key);
-			// missing `=` should be `null`:
-			// http://w3.org/TR/2012/WD-url-20120524/#collect-url-parameters
-			val = val === undefined ? null : decodeURIComponent(val);
-
-			if (!ret.hasOwnProperty(key)) {
-				ret[key] = val;
-			} else if (Array.isArray(ret[key])) {
-				ret[key].push(val);
-			} else {
-				ret[key] = [ret[key], val];
-			}
-
-			return ret;
-		}, {});
-	};
-
-	queryString.stringify = function (obj) {
-		return obj ? Object.keys(obj).map(function (key) {
-			var val = obj[key];
-
-			if (Array.isArray(val)) {
-				return val.map(function (val2) {
-					return encodeURIComponent(key) + '=' + encodeURIComponent(val2);
-				}).join('&');
-			}
-
-			return encodeURIComponent(key) + '=' + encodeURIComponent(val);
-		}).join('&') : '';
-	};
-
-	if (typeof define === 'function' && define.amd) {
-		define(function() { return queryString; });
-	} else if (typeof module !== 'undefined' && module.exports) {
-		module.exports = queryString;
-	} else {
-		self.queryString = queryString;
-	}
-})();
-
-},{}],49:[function(require,module,exports){
+},{"three":35}],34:[function(require,module,exports){
 /**
- * @author James Baicoianu / http://www.baicoianu.com/
- * Source: https://github.com/mrdoob/three.js/blob/master/examples/js/controls/FlyControls.js
+ * @author Eberhard Graether / http://egraether.com/
+ * @author Mark Lundin / http://mark-lundin.com
  *
- * Adopted to common js by Andrei Kashcha
+ * Adopted to commonjs by Andrei Kashcha
  */
+var THREE = require('three');
 
-var eventify = require('ngraph.events');
-var createKeyMap = require('./keymap.js');
+module.exports = Trackball;
 
-module.exports = fly;
+function Trackball( object, domElement ) {
+	var _this = this;
+	var STATE = { NONE: -1, ROTATE: 0, ZOOM: 1, PAN: 2, TOUCH_ROTATE: 3, TOUCH_ZOOM: 4, TOUCH_PAN: 5 };
 
-function fly(camera, domElement, THREE) {
-  domElement = domElement || document;
-  domElement.setAttribute('tabindex', -1);
+	this.object = object;
+	this.domElement = ( domElement !== undefined ) ? domElement : document;
 
-  var moveState = {
-    up: 0,
-    down: 0,
-    left: 0,
-    right: 0,
-    forward: 0,
-    back: 0,
-    pitchUp: 0,
-    pitchDown: 0,
-    yawLeft: 0,
-    yawRight: 0,
-    rollLeft: 0,
-    rollRight: 0
+	// API
+
+	this.enabled = true;
+
+	this.screen = { left: 0, top: 0, width: 0, height: 0 };
+
+	this.rotateSpeed = 1.0;
+	this.zoomSpeed = 1.2;
+	this.panSpeed = 0.3;
+
+	this.noRotate = false;
+	this.noZoom = false;
+	this.noPan = false;
+	this.noRoll = false;
+
+	this.staticMoving = false;
+	this.dynamicDampingFactor = 0.2;
+
+	this.minDistance = 0;
+	this.maxDistance = Infinity;
+
+	this.keys = [ 65 /*A*/, 83 /*S*/, 68 /*D*/ ];
+
+	// internals
+
+	this.target = new THREE.Vector3();
+
+	var EPS = 0.000001;
+
+	var lastPosition = new THREE.Vector3();
+
+	var _state = STATE.NONE,
+	_prevState = STATE.NONE,
+
+	_eye = new THREE.Vector3(),
+
+	_rotateStart = new THREE.Vector3(),
+	_rotateEnd = new THREE.Vector3(),
+
+	_zoomStart = new THREE.Vector2(),
+	_zoomEnd = new THREE.Vector2(),
+
+	_touchZoomDistanceStart = 0,
+	_touchZoomDistanceEnd = 0,
+
+	_panStart = new THREE.Vector2(),
+	_panEnd = new THREE.Vector2();
+
+	// for reset
+
+	this.target0 = this.target.clone();
+	this.position0 = this.object.position.clone();
+	this.up0 = this.object.up.clone();
+
+	// events
+
+	var changeEvent = { type: 'change' };
+	var startEvent = { type: 'start'};
+	var endEvent = { type: 'end'};
+
+
+	// methods
+
+	this.handleResize = function () {
+
+		if ( this.domElement === document ) {
+
+			this.screen.left = 0;
+			this.screen.top = 0;
+			this.screen.width = window.innerWidth;
+			this.screen.height = window.innerHeight;
+
+		} else {
+
+			var box = this.domElement.getBoundingClientRect();
+			// adjustments come from similar code in the jquery offset() function
+			var d = this.domElement.ownerDocument.documentElement;
+			this.screen.left = box.left + window.pageXOffset - d.clientLeft;
+			this.screen.top = box.top + window.pageYOffset - d.clientTop;
+			this.screen.width = box.width;
+			this.screen.height = box.height;
+
+		}
+
+	};
+
+	this.handleEvent = function ( event ) {
+
+		if ( typeof this[ event.type ] == 'function' ) {
+
+			this[ event.type ]( event );
+
+		}
+
+	};
+
+	this.getMouseOnScreen = function ( pageX, pageY, vector ) {
+
+		return vector.set(
+			( pageX - _this.screen.left ) / _this.screen.width,
+			( pageY - _this.screen.top ) / _this.screen.height
+		);
+
+	};
+
+	this.getMouseProjectionOnBall = (function(){
+
+		var objectUp = new THREE.Vector3(),
+        mouseOnBall = new THREE.Vector3();
+
+
+		return function ( pageX, pageY, projection ) {
+
+			mouseOnBall.set(
+				( pageX - _this.screen.width * 0.5 - _this.screen.left ) / (_this.screen.width*0.5),
+				( _this.screen.height * 0.5 + _this.screen.top - pageY ) / (_this.screen.height*0.5),
+				0.0
+			);
+
+			var length = mouseOnBall.length();
+
+			if ( _this.noRoll ) {
+
+				if ( length < Math.SQRT1_2 ) {
+
+					mouseOnBall.z = Math.sqrt( 1.0 - length*length );
+
+				} else {
+					mouseOnBall.z = 0.5 / length;
+				}
+
+			} else if ( length > 1.0 ) {
+
+				mouseOnBall.normalize();
+
+			} else {
+
+				mouseOnBall.z = Math.sqrt( 1.0 - length * length );
+
+			}
+
+			_eye.copy( _this.object.position ).sub( _this.target );
+
+			projection.copy( _this.object.up ).setLength( mouseOnBall.y );
+			projection.add( objectUp.copy( _this.object.up ).cross( _eye ).setLength( mouseOnBall.x ) );
+			projection.add( _eye.setLength( mouseOnBall.z ) );
+
+			return projection;
+		};
+
+	}());
+
+	this.rotateCamera = (function(){
+
+		var axis = new THREE.Vector3(),
+			quaternion = new THREE.Quaternion();
+
+
+		return function () {
+
+			var angle = Math.acos( _rotateStart.dot( _rotateEnd ) / _rotateStart.length() / _rotateEnd.length() );
+
+			if ( angle ) {
+
+				axis.crossVectors( _rotateStart, _rotateEnd ).normalize();
+
+				angle *= _this.rotateSpeed;
+
+				quaternion.setFromAxisAngle( axis, -angle );
+
+				_eye.applyQuaternion( quaternion );
+				_this.object.up.applyQuaternion( quaternion );
+
+				_rotateEnd.applyQuaternion( quaternion );
+
+				if ( _this.staticMoving ) {
+
+					_rotateStart.copy( _rotateEnd );
+
+				} else {
+
+					quaternion.setFromAxisAngle( axis, angle * ( _this.dynamicDampingFactor - 1.0 ) );
+					_rotateStart.applyQuaternion( quaternion );
+
+				}
+
+			}
+		};
+
+	}());
+
+	this.zoomCamera = function () {
+    var factor;
+
+		if ( _state === STATE.TOUCH_ZOOM ) {
+
+			factor = _touchZoomDistanceStart / _touchZoomDistanceEnd;
+			_touchZoomDistanceStart = _touchZoomDistanceEnd;
+			_eye.multiplyScalar( factor );
+
+		} else {
+
+			factor = 1.0 + ( _zoomEnd.y - _zoomStart.y ) * _this.zoomSpeed;
+
+			if ( factor !== 1.0 && factor > 0.0 ) {
+
+				_eye.multiplyScalar( factor );
+
+				if ( _this.staticMoving ) {
+
+					_zoomStart.copy( _zoomEnd );
+
+				} else {
+
+					_zoomStart.y += ( _zoomEnd.y - _zoomStart.y ) * this.dynamicDampingFactor;
+
+				}
+
+			}
+
+		}
+
+	};
+
+	this.panCamera = (function(){
+
+		var mouseChange = new THREE.Vector2(),
+			objectUp = new THREE.Vector3(),
+			pan = new THREE.Vector3();
+
+		return function () {
+
+			mouseChange.copy( _panEnd ).sub( _panStart );
+
+			if ( mouseChange.lengthSq() ) {
+
+				mouseChange.multiplyScalar( _eye.length() * _this.panSpeed );
+
+				pan.copy( _eye ).cross( _this.object.up ).setLength( mouseChange.x );
+				pan.add( objectUp.copy( _this.object.up ).setLength( mouseChange.y ) );
+
+				_this.object.position.add( pan );
+				_this.target.add( pan );
+
+				if ( _this.staticMoving ) {
+
+					_panStart.copy( _panEnd );
+
+				} else {
+
+					_panStart.add( mouseChange.subVectors( _panEnd, _panStart ).multiplyScalar( _this.dynamicDampingFactor ) );
+
+				}
+
+			}
+		};
+
+	}());
+
+	this.checkDistances = function () {
+
+		if ( !_this.noZoom || !_this.noPan ) {
+
+			if ( _eye.lengthSq() > _this.maxDistance * _this.maxDistance ) {
+
+				_this.object.position.addVectors( _this.target, _eye.setLength( _this.maxDistance ) );
+
+			}
+
+			if ( _eye.lengthSq() < _this.minDistance * _this.minDistance ) {
+
+				_this.object.position.addVectors( _this.target, _eye.setLength( _this.minDistance ) );
+
+			}
+
+		}
+
+	};
+
+	this.update = function () {
+
+		_eye.subVectors( _this.object.position, _this.target );
+
+		if ( !_this.noRotate ) {
+
+			_this.rotateCamera();
+
+		}
+
+		if ( !_this.noZoom ) {
+
+			_this.zoomCamera();
+
+		}
+
+		if ( !_this.noPan ) {
+
+			_this.panCamera();
+
+		}
+
+		_this.object.position.addVectors( _this.target, _eye );
+
+		_this.checkDistances();
+
+		_this.object.lookAt( _this.target );
+
+		if ( lastPosition.distanceToSquared( _this.object.position ) > EPS ) {
+
+			_this.dispatchEvent( changeEvent );
+
+			lastPosition.copy( _this.object.position );
+
+		}
+
+	};
+
+	this.reset = function () {
+
+		_state = STATE.NONE;
+		_prevState = STATE.NONE;
+
+		_this.target.copy( _this.target0 );
+		_this.object.position.copy( _this.position0 );
+		_this.object.up.copy( _this.up0 );
+
+		_eye.subVectors( _this.object.position, _this.target );
+
+		_this.object.lookAt( _this.target );
+
+		_this.dispatchEvent( changeEvent );
+
+		lastPosition.copy( _this.object.position );
+
+	};
+
+	// listeners
+
+	function keydown( event ) {
+
+		if ( _this.enabled === false ) return;
+
+		window.removeEventListener( 'keydown', keydown );
+
+		_prevState = _state;
+
+		if ( _state !== STATE.NONE ) {
+
+			return;
+
+		} else if ( event.keyCode === _this.keys[ STATE.ROTATE ] && !_this.noRotate ) {
+
+			_state = STATE.ROTATE;
+
+		} else if ( event.keyCode === _this.keys[ STATE.ZOOM ] && !_this.noZoom ) {
+
+			_state = STATE.ZOOM;
+
+		} else if ( event.keyCode === _this.keys[ STATE.PAN ] && !_this.noPan ) {
+
+			_state = STATE.PAN;
+
+		}
+
+	}
+
+	function keyup( event ) {
+
+		if ( _this.enabled === false ) return;
+
+		_state = _prevState;
+
+		window.addEventListener( 'keydown', keydown, false );
+
+	}
+
+	function mousedown( event ) {
+
+		if ( _this.enabled === false ) return;
+
+		event.preventDefault();
+		event.stopPropagation();
+
+		if ( _state === STATE.NONE ) {
+
+			_state = event.button;
+
+		}
+
+		if ( _state === STATE.ROTATE && !_this.noRotate ) {
+
+			_this.getMouseProjectionOnBall( event.pageX, event.pageY, _rotateStart );
+			_rotateEnd.copy(_rotateStart);
+
+		} else if ( _state === STATE.ZOOM && !_this.noZoom ) {
+
+			_this.getMouseOnScreen( event.pageX, event.pageY, _zoomStart );
+			_zoomEnd.copy(_zoomStart);
+
+		} else if ( _state === STATE.PAN && !_this.noPan ) {
+
+			_this.getMouseOnScreen( event.pageX, event.pageY, _panStart );
+			_panEnd.copy(_panStart);
+
+		}
+
+		document.addEventListener( 'mousemove', mousemove, false );
+		document.addEventListener( 'mouseup', mouseup, false );
+		_this.dispatchEvent( startEvent );
+	}
+
+	function mousemove( event ) {
+
+		if ( _this.enabled === false ) return;
+
+		event.preventDefault();
+		event.stopPropagation();
+
+		if ( _state === STATE.ROTATE && !_this.noRotate ) {
+
+			_this.getMouseProjectionOnBall( event.pageX, event.pageY, _rotateEnd );
+
+		} else if ( _state === STATE.ZOOM && !_this.noZoom ) {
+
+			_this.getMouseOnScreen( event.pageX, event.pageY, _zoomEnd );
+
+		} else if ( _state === STATE.PAN && !_this.noPan ) {
+
+			_this.getMouseOnScreen( event.pageX, event.pageY, _panEnd );
+
+		}
+
+	}
+
+	function mouseup( event ) {
+
+		if ( _this.enabled === false ) return;
+
+		event.preventDefault();
+		event.stopPropagation();
+
+		_state = STATE.NONE;
+
+		document.removeEventListener( 'mousemove', mousemove );
+		document.removeEventListener( 'mouseup', mouseup );
+		_this.dispatchEvent( endEvent );
+
+	}
+
+	function mousewheel( event ) {
+
+		if ( _this.enabled === false ) return;
+
+		event.preventDefault();
+		event.stopPropagation();
+
+		var delta = 0;
+
+		if ( event.wheelDelta ) { // WebKit / Opera / Explorer 9
+
+			delta = event.wheelDelta / 40;
+
+		} else if ( event.detail ) { // Firefox
+
+			delta = - event.detail / 3;
+
+		}
+
+		_zoomStart.y += delta * 0.01;
+		_this.dispatchEvent( startEvent );
+		_this.dispatchEvent( endEvent );
+
+	}
+
+	function touchstart( event ) {
+
+		if ( _this.enabled === false ) return;
+
+		switch ( event.touches.length ) {
+
+			case 1:
+				_state = STATE.TOUCH_ROTATE;
+				_rotateEnd.copy( _this.getMouseProjectionOnBall( event.touches[ 0 ].pageX, event.touches[ 0 ].pageY, _rotateStart ));
+				break;
+
+			case 2:
+				_state = STATE.TOUCH_ZOOM;
+				var dx = event.touches[ 0 ].pageX - event.touches[ 1 ].pageX;
+				var dy = event.touches[ 0 ].pageY - event.touches[ 1 ].pageY;
+				_touchZoomDistanceEnd = _touchZoomDistanceStart = Math.sqrt( dx * dx + dy * dy );
+				break;
+
+			case 3:
+				_state = STATE.TOUCH_PAN;
+				_panEnd.copy( _this.getMouseOnScreen( event.touches[ 0 ].pageX, event.touches[ 0 ].pageY, _panStart ));
+				break;
+
+			default:
+				_state = STATE.NONE;
+
+		}
+		_this.dispatchEvent( startEvent );
+
+
+	}
+
+	function touchmove( event ) {
+
+		if ( _this.enabled === false ) return;
+
+		event.preventDefault();
+		event.stopPropagation();
+
+		switch ( event.touches.length ) {
+
+			case 1:
+				_this.getMouseProjectionOnBall( event.touches[ 0 ].pageX, event.touches[ 0 ].pageY, _rotateEnd );
+				break;
+
+			case 2:
+				var dx = event.touches[ 0 ].pageX - event.touches[ 1 ].pageX;
+				var dy = event.touches[ 0 ].pageY - event.touches[ 1 ].pageY;
+				_touchZoomDistanceEnd = Math.sqrt( dx * dx + dy * dy );
+				break;
+
+			case 3:
+				_this.getMouseOnScreen( event.touches[ 0 ].pageX, event.touches[ 0 ].pageY, _panEnd );
+				break;
+
+			default:
+				_state = STATE.NONE;
+
+		}
+
+	}
+
+	function touchend( event ) {
+
+		if ( _this.enabled === false ) return;
+
+		switch ( event.touches.length ) {
+
+			case 1:
+				_rotateStart.copy( _this.getMouseProjectionOnBall( event.touches[ 0 ].pageX, event.touches[ 0 ].pageY, _rotateEnd ));
+				break;
+
+			case 2:
+				_touchZoomDistanceStart = _touchZoomDistanceEnd = 0;
+				break;
+
+			case 3:
+				_panStart.copy( _this.getMouseOnScreen( event.touches[ 0 ].pageX, event.touches[ 0 ].pageY, _panEnd ));
+				break;
+
+		}
+
+		_state = STATE.NONE;
+		_this.dispatchEvent( endEvent );
+
+	}
+
+	this.domElement.addEventListener( 'contextmenu', preventEvent, false );
+
+	this.domElement.addEventListener( 'mousedown', mousedown, false );
+
+	this.domElement.addEventListener( 'mousewheel', mousewheel, false );
+	this.domElement.addEventListener( 'DOMMouseScroll', mousewheel, false ); // firefox
+
+	this.domElement.addEventListener( 'touchstart', touchstart, false );
+	this.domElement.addEventListener( 'touchend', touchend, false );
+	this.domElement.addEventListener( 'touchmove', touchmove, false );
+
+	window.addEventListener( 'keydown', keydown, false );
+	window.addEventListener( 'keyup', keyup, false );
+
+  this.dispose = function () {
+    var domElement = _this.domElement;
+    domElement.removeEventListener('contextmenu', preventEvent);
+    domElement.removeEventListener('mousedown', mousedown);
+    domElement.removeEventListener('mousewheel', mousewheel);
+    domElement.removeEventListener('DOMMouseScroll', mousewheel);
+    domElement.removeEventListener('touchstart', touchstart);
+    domElement.removeEventListener('touchend', touchend);
+    domElement.removeEventListener('touchmove', touchmove);
+
+		document.removeEventListener( 'mousemove', mousemove);
+		document.removeEventListener( 'mouseup', mouseup);
+    window.removeEventListener('keydown', keydown);
+    window.removeEventListener('keyup', keyup);
   };
 
+	this.handleResize();
 
-  var api = {
-    rollSpeed: 0.005,
-    movementSpeed: 1,
-    dragToLook: true,
-    autoForward: false,
-    /**
-     * Requests to update camera position according to the currently pressed
-     * keys/mouse
-     */
-    update: update,
-
-    /**
-     * Returns true if we are moving camera at the moment
-     */
-    isMoving: isMoving,
-
-    /**
-     * Releases all event handlers
-     */
-    destroy: destroy,
-
-    /**
-     * This allows external developers to better control our internal state
-     * Super flexible, yet a bit dangerous
-     */
-    moveState: moveState,
-
-    updateMovementVector: updateMovementVector,
-    updateRotationVector: updateRotationVector,
-
-    /**
-     * Toggles dragToLook setting. When dragToLook is set to false, then
-     * camera always attempts to focus on current mouse position. The only
-     * stable point in the visualization is middle of the screen.
-     */
-    toggleDragToLook: toggleDragToLook
-  };
-
-  eventify(api);
-
-  var tmpQuaternion = new THREE.Quaternion();
-  var isMouseDown = 0;
-  var keyMap = createKeyMap();
-  // we will remember what keys should be releaed in global keyup handler:
-  var pendingKeyUp = Object.create(null);
-
-  var moveVector = new THREE.Vector3(0, 0, 0);
-  var rotationVector = new THREE.Vector3(0, 0, 0);
-
-  var moveArgs = {
-    move: moveVector,
-    rotate: rotationVector
-  };
-
-  // these are local to the scene container. We want to initiate actions only
-  // when we have focus
-  domElement.addEventListener('mousedown', mousedown, false);
-  domElement.addEventListener('keydown', keydown, false);
-
-  // These are global since we can loose control otherwise and miss keyup/move
-  // events.
-  document.addEventListener('mousemove', mousemove, false);
-  document.addEventListener('keyup', keyup, false);
-
-  updateMovementVector();
-  updateRotationVector();
-
-  return api;
-
-  function isMoving() {
-    return moveState.up
-            || moveState.down
-            || moveState.left
-            || moveState.right
-            || moveState.forward
-            || moveState.back
-            || moveState.pitchUp
-            || moveState.pitchDown
-            || moveState.yawLeft
-            || moveState.yawRight
-            || moveState.rollLeft
-            || moveState.rollRight;
-  }
-
-  function toggleDragToLook() {
-    api.dragToLook = !api.dragToLook;
-    api.moveState.yawLeft = 0;
-    api.moveState.pitchDown = 0;
-
-    updateRotationVector();
-
-    return api.dragToLook;
-  }
-
-  function update(delta) {
-    var moveMult = delta * api.movementSpeed;
-    var rotMult = delta * api.rollSpeed;
-
-    camera.translateX(moveVector.x * moveMult);
-    camera.translateY(moveVector.y * moveMult);
-    camera.translateZ(moveVector.z * moveMult);
-
-    tmpQuaternion.set(rotationVector.x * rotMult, rotationVector.y * rotMult, rotationVector.z * rotMult, 1).normalize();
-    camera.quaternion.multiply(tmpQuaternion);
-
-    // expose the rotation vector for convenience
-    camera.rotation.setFromQuaternion(camera.quaternion, camera.rotation.order);
-  }
-
-  function keydown(event) {
-    if (isModifierKey(event)) return;
-
-    var motion = keyMap[event.keyCode];
-    if (motion) {
-      moveState[motion.name] = 1;
-      // we need to make sure that global key up event clears this motion:
-      pendingKeyUp[event.keyCode] = true;
-
-      updateMovementVector();
-      updateRotationVector();
-      api.fire('move', moveArgs);
-    }
-  }
-
-  function isModifierKey(e) {
-    return e.altKey || e.ctrlKey || e.metaKey;
-  }
-
-  function keyup(event) {
-    if (!pendingKeyUp[event.keyCode]) return;
-    pendingKeyUp[event.keyCode] = false;
-    var motion = keyMap[event.keyCode];
-    moveState[motion.name] = 0;
-
-    updateMovementVector();
-    updateRotationVector();
-    api.fire('move', moveArgs);
-  }
-
-  function mousedown(event) {
-    if (domElement !== document) {
-      domElement.focus();
-    }
-
-    document.addEventListener('mouseup', mouseup, false);
-
-    event.preventDefault();
-    //event.stopPropagation();
-
-    if (api.dragToLook) {
-      isMouseDown = true;
-    } else {
-      switch (event.button) {
-        case 0:
-          moveState.forward = 1;
-          break;
-        case 2:
-          moveState.back = 1;
-          break;
-      }
-
-      updateMovementVector();
-    }
-
-    api.fire('move', moveArgs);
-  }
-
-  function mousemove(event) {
-    if (!api.dragToLook || isMouseDown) {
-      var container = getContainerDimensions();
-      var halfWidth = container.size[0] / 2;
-      var halfHeight = container.size[1] / 2;
-
-      moveState.yawLeft = -((event.pageX - container.offset[0]) - halfWidth) / halfWidth;
-      moveState.pitchDown = ((event.pageY - container.offset[1]) - halfHeight) / halfHeight;
-
-      updateRotationVector();
-      api.fire('move', moveArgs);
-    }
-  }
-
-  function mouseup(event) {
-    event.preventDefault();
-
-    if (isMouseDown) {
-      document.removeEventListener('mouseup', mouseup);
-      isMouseDown = false;
-    }
-
-    if (api.dragToLook) {
-      moveState.yawLeft = moveState.pitchDown = 0;
-    } else {
-      switch (event.button) {
-        case 0:
-          moveState.forward = 0;
-          break;
-        case 2:
-          moveState.back = 0;
-          break;
-      }
-      updateMovementVector();
-    }
-
-    updateRotationVector();
-    api.fire('move', moveArgs);
-  }
-
-
-  function updateMovementVector() {
-    var forward = (moveState.forward || (api.autoForward && !moveState.back)) ? 1 : 0;
-
-    moveVector.x = (-moveState.left + moveState.right);
-    moveVector.y = (-moveState.down + moveState.up);
-    moveVector.z = (-forward + moveState.back);
-  }
-
-  function updateRotationVector() {
-    rotationVector.x = (-moveState.pitchDown + moveState.pitchUp);
-    rotationVector.y = (-moveState.yawRight + moveState.yawLeft);
-    rotationVector.z = (-moveState.rollRight + moveState.rollLeft);
-  }
-
-  function getContainerDimensions() {
-    if (domElement !== document) {
-      return {
-        size: [domElement.offsetWidth, domElement.offsetHeight],
-        offset: [domElement.offsetLeft, domElement.offsetTop]
-      };
-    } else {
-      return {
-        size: [window.innerWidth, window.innerHeight],
-        offset: [0, 0]
-      };
-    }
-  }
-
-  function destroy() {
-    document.removeEventListener('mouseup', mouseup);
-    document.removeEventListener('mousemove', mousemove, false);
-    document.removeEventListener('keyup', keyup, false);
-    domElement.removeEventListener('mousedown', mousedown, false);
-    domElement.removeEventListener('keydown', keydown, false);
-  }
+	// force an update at start
+	this.update();
 }
 
-},{"./keymap.js":50,"ngraph.events":19}],50:[function(require,module,exports){
-/**
- * Defines default key bindings for the controls
- */
-module.exports = createKeyMap;
+function preventEvent( event ) { event.preventDefault(); }
 
-function createKeyMap() {
-  return {
-    87: { name: 'forward' }, // W
-    83: { name: 'back'}, // S
-    65: { name: 'left'}, // A
-    68: { name: 'right'},// D
-    82: { name: 'up'}, // R
-    70: { name: 'down'}, // F
-    38: { name: 'pitchUp'}, // up
-    40: { name: 'pitchDown'}, // down
-    37: { name: 'yawLeft'}, // left
-    39: { name: 'yawRight'}, // right
-    81: { name: 'rollLeft'}, // Q
-    69: { name: 'rollRight'}, // E
-  };
-}
+Trackball.prototype = Object.create(THREE.EventDispatcher.prototype);
 
-},{}],51:[function(require,module,exports){
+},{"three":35}],35:[function(require,module,exports){
 (function (global, factory) {
 	typeof exports === 'object' && typeof module !== 'undefined' ? factory(exports) :
 	typeof define === 'function' && define.amd ? define(['exports'], factory) :
@@ -50196,93 +49263,5 @@ function createKeyMap() {
 	Object.defineProperty(exports, '__esModule', { value: true });
 
 })));
-
-},{}],52:[function(require,module,exports){
-/**
- * This file contains all possible configuration optins for the renderer
- */
-module.exports = validateOptions;
-
-var createLayout = require('pixel.layout'); // the default layout
-
-function validateOptions(options) {
-  options = options || {};
-
-  /**
-   * Where to render the graph? Assume `document.body` by default.
-   */
-  options.container = options.container || document.body;
-
-  /**
-  /* Let the renderer automatically fit the graph to available screen space.
-   * Enabled by default.
-   * Note: The autofit will only be executed until first user input.
-   */
-  options.autoFit = options.autoFit !== undefined ? options.autoFit : true;
-
-  /**
-   * Background of the scene in hexadecimal form. Default value is 0x000000 (black);
-   */
-  options.clearColor = typeof options.clearColor === 'number' ? options.clearColor : 0xffffff;
-
-
-  /**
-   * Clear color opacity from 0 (transparent) to 1 (opaque); Default value is 1;
-   */
-  options.clearAlpha = typeof options.clearAlpha === 'number' ? options.clearAlpha : 1;
-
-  /**
-   * Layout algorithm factory. Valid layout algorithms are required to have just two methods:
-   * `getNodePosition(nodeId)` and `step()`. See `pixel.layout` module for the
-   * reference: https://github.com/anvaka/pixel.layout
-   */
-  options.createLayout = typeof options.createLayout === 'function' ? options.createLayout : createLayout;
-
-  /**
-   * Experimental API: How link should be rendered?
-   */
-  options.link = typeof options.link === 'function' ? options.link : defaultLink;
-
-  /**
-   * Experimental API: How node should be rendered?
-   */
-  options.node = typeof options.node === 'function' ? options.node : defaultNode;
-
-  /**
-   * Experimental API: When activeNode is explicitly set to false, then no proxy
-   * object is created. Which means actual updates to the node have to be manual
-   *
-   * TODO: Extend this documentation if this approach sticks.
-   */
-  options.activeNode = typeof options.activeNode === 'undefined' ? true : options.activeNode;
-
-  /**
-   * Experimental API: When activeLink is explicitly set to false, then no proxy
-   * object is created for links. Which means actual updates to the link have to be manual
-   *
-   * TODO: Extend this documentation if this approach sticks.
-   */
-  options.activeLink = typeof options.activeLink === 'undefined' ? true : options.activeLink;
-
-  return options;
-}
-
-function defaultNode(/* node */) {
-  return { size: 20, color: 0xFF0894 };
-}
-
-function defaultLink(/* link */) {
-  return { fromColor: 0x000000,  toColor: 0x000000 };
-}
-
-},{"pixel.layout":47}],53:[function(require,module,exports){
-module.exports = [
-'.ngraph-tooltip {',
-'  position: absolute;',
-'  color: white;',
-'  pointer-events: none;',
-'  padding: 3px;',
-'  background: rgba(0, 0, 0, 0.6);',
-'}'].join('\n');
 
 },{}]},{},[1]);
