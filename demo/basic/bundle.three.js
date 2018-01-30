@@ -1,5 +1,4 @@
 (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
-
 const graph = require('ngraph.graph')();
 const recurseBF = require('../../lib/recurseBFngraph');
 const threeGraphics = require('../../lib/threeGraphics');
@@ -7,42 +6,61 @@ const eventify = require('ngraph.events');
 const nthree = require('ngraph.three');
 const THREE = require('three');
 
-var scene = new THREE.Scene();
-scene.background = new THREE.Color( 0xdddddd );
-scene.fog = new THREE.FogExp2( 0xdddddd, 0.002 );
+// Configure
+var physicsSettings = {
+  springLength: 30,
+  springCoeff: 0.0008,
+  gravity: -1.2,
+  theta: 0.8,
+  dragCoeff: 0.02,
+  timeStep: 10
+};
 
-var graphics = nthree(graph, {physicsSettings : {timeStep: 20}, scene: scene });
+var layout3d = require('ngraph.forcelayout3d');
+var layout2d = layout3d.get2dLayout; // this on it's own is not enough, you need to tell the rendering function to set the z=0
+var graphics = nthree(graph, {physicsSettings : physicsSettings, layout: layout2d(graph, physicsSettings)});
 graphics.createNodeUI(threeGraphics.createNodeUI);
-//graphics.scene.fog = new graphics.THREE.FogExp2( 0xcccccc, 0.2 );
-//graphics.scene.background = new graphics.THREE.Color( 0xffffff );
-graphics.run(); // begin animation loop
-// layout.is3d(false); // Make non 3d, have to update the gui tho
+graphics.createLinkUI(threeGraphics.createLinkUI);
+graphics.renderNode(threeGraphics.nodeRenderer);
+graphics.renderLink(threeGraphics.linkRenderer);
 
+graphics.scene.fog = new graphics.THREE.FogExp2( 0xccccee, 0.001 );
+graphics.scene.background = new graphics.THREE.Color( 0xeeeeee );
+var directionalLight = new THREE.DirectionalLight( 0xffffff, 1 );
+graphics.scene.add( directionalLight );
+
+graphics.run(); // begin animation loop
 
 /*
   * Breadth First
   */
 function start3dgraph (data) {
-  const colorPalette = '5555000000';
   recurseBF.recurseBF(graph, recurseBF.getHtmlNode(data));
-  const regex = /^[a-z]*/;
+  //const regex = /^[a-z]*/;
 
   recurseBF.events.on('cleared', function() {
-    console.log('Finished adding nodes, stable');
-    graph.forEachNode(function(nodeUI){
-      nodeUI.color = '0x' + recurseBF.intToRGB(recurseBF.hashCode(regex.exec(nodeUI.id)[0] + colorPalette));
-      nodeUI.size = 50;
-    })
-    //renderer.stable(true);
+    console.log(`Finished adding nodes, stable, maxDepth: ${graph.ilandom.maxDepth}`);
+    // got to stop the fucking layout here, did that do it?
+    // graphics.layout.dispose();
+    // don't think so.
+
+
+    // graph.forEachNode(function(nodeUI){
+    //   nodeUI.color = '0x' + recurseBF.intToRGB(recurseBF.hashCode(regex.exec(nodeUI.id)[0] + colorPalette));
+    //   nodeUI.size = 50;
+    // })
+    graphics.isStable();
   });
 
   recurseBF.events.on('added', function( parentNodeId, childNodeId ) {
+    // console.log(`id: ${graph.getNode(childNodeId).id}, data: ${graph.getNode(childNodeId).data}`);
+    // console.groupEnd();
     //renderer.graph().addLink(parentNodeId, childNodeId);
-    graph.forEachNode(function(nodeUI){
-      myArray = regex.exec(nodeUI.id);
-      nodeUI.color = '0x' + recurseBF.intToRGB(recurseBF.hashCode(regex.exec(nodeUI.id)[0] + colorPalette));
-      nodeUI.size = 50;
-    })
+    // graph.forEachNode(function(nodeUI){
+    //   myArray = regex.exec(nodeUI.id);
+    //   nodeUI.color = '0x' + recurseBF.intToRGB(recurseBF.hashCode(regex.exec(nodeUI.id)[0] + colorPalette));
+    //   nodeUI.size = 50;
+    // })
     //renderer.getNode(childNodeId).size = 100; // this is reset when something is added to the graph
     //renderer.getNode(childNodeId).color = 0x000000; // this is reset when something is added to the graph
     graphics.resetStable();
@@ -54,7 +72,7 @@ if (window) {
   window.scene = graphics.scene;
   window.THREE = THREE;
 }
-},{"../../lib/recurseBFngraph":2,"../../lib/threeGraphics":3,"ngraph.events":4,"ngraph.graph":13,"ngraph.three":32,"three":35}],2:[function(require,module,exports){
+},{"../../lib/recurseBFngraph":2,"../../lib/threeGraphics":3,"ngraph.events":4,"ngraph.forcelayout3d":7,"ngraph.graph":13,"ngraph.three":32,"three":35}],2:[function(require,module,exports){
 // ----------- Lib ---------------
 
 var eventify = require('ngraph.events');
@@ -96,12 +114,11 @@ function createRoot(graph, domNode) {
   rootId = (domNode.tagName || domNode.nodeName);
 
   graph.addNode(rootId, {
-    x: 0,
-    y: 0,
-    size: nodeSize,
-    label: rootId + '-0',
-    tagColor: '0x000000'
+    depth: 0
   });
+
+  graph.ilandom = {};
+  graph.ilandom.maxDepth = 0;
   
   return rootId;
 }
@@ -119,13 +136,15 @@ function recurseBF(graph, treeHeadNode) {
   var current;
   var parent;
   var children, i, len;
-  var depth; //not really used here, but keep
+  var depth;
   var childNodeId;
 
   var nodeIntervalId = setInterval(function () {
     if (current = stack[stackItem++]) {
-      //console.log('popping next parent from stack');
+      // console.log('popped next child that is now a parent, from stack');
+
       depth = current.depth;
+      if (depth > graph.ilandom.maxDepth) { graph.ilandom.maxDepth = depth; }
       parent = current.element;
       parentNodeId = current.nodeId;
       children = parent.childNodes;
@@ -135,7 +154,7 @@ function recurseBF(graph, treeHeadNode) {
         for (i = 0, len = children.length; i < len; i++) {
           if (children[i].nodeType === 1) {
             //console.log('adding child to stack');
-            childNodeId = addNewChildNodeToParent(graph, parentNodeId, children[i]);
+            childNodeId = addNewChildNodeToParent(graph, parentNodeId, children[i], depth);
             stack.push({ //pass args via object or array
               element: children[i],
               nodeId: childNodeId,
@@ -154,11 +173,24 @@ function recurseBF(graph, treeHeadNode) {
 }
 
 // Create a node, for every child, and create the edge between it and the parent
-function addNewChildNodeToParent(graph, parentNodeId, child) {
+function addNewChildNodeToParent(graph, parentNodeId, child, depth) {
   nodeCount = graph.getNodesCount();
   nodeCount++;
   childNodeId = child.tagName + '-' + nodeCount;
-  graph.addLink(parentNodeId, childNodeId);
+
+  // console.group();
+  // console.log('Before AddLink');
+  graph.addLink(parentNodeId, childNodeId, {depthOfChild: depth + 1});
+  // console.log('After AddLink');
+
+  var justAddedNode = graph.getNode(childNodeId);
+  if (justAddedNode.data) {
+    justAddedNode.data.depth = depth + 1;
+  }
+  else {
+    justAddedNode.data = {depth: depth + 1};
+  }
+
   events.fire('added', parentNodeId, childNodeId);
   return childNodeId;
 }
@@ -213,13 +245,26 @@ module.exports.nodeRenderer = nodeRenderer;
  */
 module.exports.linkRenderer = linkRenderer;
 
-var NODE_SIZE = 2; // default size of a node square
+const NODE_SIZE = 5; // default size of a node square
+const HEIGHT_STEP = 60;
 
 
 function createNodeUI(node) {
+  //console.log('During AddLink');
+  let depth = (node.links &&
+               node.links.length > 0 &&
+               node.links[0].data &&
+               node.links[0].data.depthOfChild) ? node.links[0].data.depthOfChild : 0;
+  //console.log(`Depth from link is: ${depth}`);
+
+  //var nodeMaterial = new THREE.MeshPhongMaterial({ color: 0xff0000 , specular: 0x111111});
   var nodeMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+  //var nodeGeometry = new THREE.CylinderGeometry( 0, NODE_SIZE*3, NODE_SIZE*3, 3, 1 );  
   var nodeGeometry = new THREE.BoxGeometry(NODE_SIZE, NODE_SIZE, NODE_SIZE);
-  return new THREE.Mesh(nodeGeometry, nodeMaterial);
+  var mesh = new THREE.Mesh(nodeGeometry, nodeMaterial);
+  mesh.userData.depth = depth;
+  //mesh.rotation.x = Math.PI / 2;
+  return mesh;
 }
 
 function createLinkUI(link) {
@@ -228,22 +273,34 @@ function createLinkUI(link) {
   linkGeometry.vertices.push(new THREE.Vector3(0, 0, 0));
   linkGeometry.vertices.push(new THREE.Vector3(0, 0, 0));
 
-  var linkMaterial = new THREE.LineBasicMaterial({ color: 0x00cccc });
-  return new THREE.Line(linkGeometry, linkMaterial);
+  var linkMaterial = new THREE.LineBasicMaterial({ color: 0x0000FF });
+  var line = new THREE.Line(linkGeometry, linkMaterial);
+  line.userData.depthOfChild = link.data.depthOfChild;
+  return line;
 }
 
+// This function is called EVERY frame. Be nice.
 function nodeRenderer(node) {
   node.position.x = node.pos.x;
   node.position.y = node.pos.y;
-  node.position.z = node.pos.z;
+  if (!node.heighIsset) { //update every frame, based on depth, no. of children, data
+    node.position.z = getNodeHeight(node);
+    node.heighIsset = true;
+  }  // TODO: get node info and update every frame....
+  //console.log(`x: ${node.pos.x}, y: ${node.pos.y}, z: ${node.pos.z}`);
 }
 
 function linkRenderer(link) {
   var from = link.from;
   var to = link.to;
-  link.geometry.vertices[0].set(from.x, from.y, from.z);
-  link.geometry.vertices[1].set(to.x, to.y, to.z);
+  link.geometry.vertices[0].set(from.x, from.y, -1 * (link.userData.depthOfChild - 1) * HEIGHT_STEP);
+  link.geometry.vertices[1].set(to.x, to.y, -1 * (link.userData.depthOfChild) * HEIGHT_STEP);
   link.geometry.verticesNeedUpdate = true;
+}
+
+// tsouk from here onwards
+function getNodeHeight(node) {
+  return ( -1 * node.userData.depth * HEIGHT_STEP);
 }
 
 },{"three":35}],4:[function(require,module,exports){
@@ -3284,6 +3341,7 @@ module.exports = function (graph, settings) {
      * This is useful if you want to allow users to update the physics settings of your layout interactively
      */
     resetStable: resetStable,
+    isStable: function() {isStable = true},
 
   /**
      * Stops animation and deallocates all allocated resources
