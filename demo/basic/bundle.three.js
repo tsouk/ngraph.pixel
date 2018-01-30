@@ -259,7 +259,7 @@ function createNodeUI(node) {
 
   //var nodeMaterial = new THREE.MeshPhongMaterial({ color: 0xff0000 , specular: 0x111111});
   var nodeMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-  //var nodeGeometry = new THREE.CylinderGeometry( 0, NODE_SIZE*3, NODE_SIZE*3, 3, 1 );  
+  //var nodeGeometry = new THREE.CylinderGeometry( 0, NODE_SIZE*3, NODE_SIZE*3, 3, 1 );
   var nodeGeometry = new THREE.BoxGeometry(NODE_SIZE, NODE_SIZE, NODE_SIZE);
   var mesh = new THREE.Mesh(nodeGeometry, nodeMaterial);
   mesh.userData.depth = depth;
