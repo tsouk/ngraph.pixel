@@ -1,7 +1,6 @@
 (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
 const graph = require('ngraph.graph')();
 const recurseBF = require('../../lib/recurseBFngraph');
-const threeGraphics = require('../../lib/threeGraphics');
 const eventify = require('ngraph.events');
 const nthree = require('ngraph.three');
 const THREE = require('three');
@@ -19,15 +18,16 @@ var physicsSettings = {
 var layout3d = require('ngraph.forcelayout3d');
 var layout2d = layout3d.get2dLayout; // this on it's own is not enough, you need to tell the rendering function to set the z=0
 var graphics = nthree(graph, {physicsSettings : physicsSettings, layout: layout2d(graph, physicsSettings)});
+const threeGraphics = require('../../lib/threeGraphics')(graph, graphics.scene);
 graphics.createNodeUI(threeGraphics.createNodeUI);
 graphics.createLinkUI(threeGraphics.createLinkUI);
 graphics.renderNode(threeGraphics.nodeRenderer);
 graphics.renderLink(threeGraphics.linkRenderer);
 
-graphics.scene.fog = new graphics.THREE.FogExp2( 0xccccee, 0.001 );
+// graphics.scene.fog = new graphics.THREE.FogExp2( 0xccccee, 0.001 );
 graphics.scene.background = new graphics.THREE.Color( 0xeeeeee );
-var directionalLight = new THREE.DirectionalLight( 0xffffff, 1 );
-graphics.scene.add( directionalLight );
+// var directionalLight = new THREE.DirectionalLight( 0xffffff, 1 );
+// graphics.scene.add( directionalLight );
 
 graphics.run(); // begin animation loop
 
@@ -40,10 +40,7 @@ function start3dgraph (data) {
 
   recurseBF.events.on('cleared', function() {
     console.log(`Finished adding nodes, stable, maxDepth: ${graph.ilandom.maxDepth}`);
-    // got to stop the fucking layout here, did that do it?
-    // graphics.layout.dispose();
-    // don't think so.
-
+    threeGraphics.setMaxDepth(graph.ilandom.maxDepth);
 
     // graph.forEachNode(function(nodeUI){
     //   nodeUI.color = '0x' + recurseBF.intToRGB(recurseBF.hashCode(regex.exec(nodeUI.id)[0] + colorPalette));
@@ -54,7 +51,9 @@ function start3dgraph (data) {
 
   recurseBF.events.on('added', function( parentNodeId, childNodeId ) {
     // console.log(`id: ${graph.getNode(childNodeId).id}, data: ${graph.getNode(childNodeId).data}`);
-    // console.groupEnd();
+    threeGraphics.setMaxDepth(graph.ilandom.maxDepth);
+    //console.groupEnd();
+
     //renderer.graph().addLink(parentNodeId, childNodeId);
     // graph.forEachNode(function(nodeUI){
     //   myArray = regex.exec(nodeUI.id);
@@ -72,7 +71,7 @@ if (window) {
   window.scene = graphics.scene;
   window.THREE = THREE;
 }
-},{"../../lib/recurseBFngraph":2,"../../lib/threeGraphics":3,"ngraph.events":4,"ngraph.forcelayout3d":7,"ngraph.graph":13,"ngraph.three":32,"three":35}],2:[function(require,module,exports){
+},{"../../lib/recurseBFngraph":2,"../../lib/threeGraphics":3,"ngraph.events":5,"ngraph.forcelayout3d":8,"ngraph.graph":14,"ngraph.three":33,"three":36}],2:[function(require,module,exports){
 // ----------- Lib ---------------
 
 var eventify = require('ngraph.events');
@@ -114,7 +113,8 @@ function createRoot(graph, domNode) {
   rootId = (domNode.tagName || domNode.nodeName);
 
   graph.addNode(rootId, {
-    depth: 0
+    depth: 0,
+    numberOfChildren: 0
   });
 
   graph.ilandom = {};
@@ -150,8 +150,9 @@ function recurseBF(graph, treeHeadNode) {
       children = parent.childNodes;
 
       //I should probably check for ...
+      // TODO: only go through children that are type 1?
       if (children) {
-        for (i = 0, len = children.length; i < len; i++) {
+        for (i = 0, len = children.length; i < len ; i++) { // (i < len && i < 24) works for simplified iland graphs, but probably should only do that to the head... 
           if (children[i].nodeType === 1) {
             //console.log('adding child to stack');
             childNodeId = addNewChildNodeToParent(graph, parentNodeId, children[i], depth);
@@ -178,17 +179,19 @@ function addNewChildNodeToParent(graph, parentNodeId, child, depth) {
   nodeCount++;
   childNodeId = child.tagName + '-' + nodeCount;
 
-  // console.group();
+  //console.group();
   // console.log('Before AddLink');
+  graph.getNode(parentNodeId).data.numberOfChildren++;
   graph.addLink(parentNodeId, childNodeId, {depthOfChild: depth + 1});
   // console.log('After AddLink');
 
   var justAddedNode = graph.getNode(childNodeId);
+  
   if (justAddedNode.data) {
     justAddedNode.data.depth = depth + 1;
   }
   else {
-    justAddedNode.data = {depth: depth + 1};
+    justAddedNode.data = {depth: depth + 1, numberOfChildren: 0};
   }
 
   events.fire('added', parentNodeId, childNodeId);
@@ -218,92 +221,584 @@ module.exports = {
   hashCode,
   intToRGB,
 };
-},{"ngraph.events":4}],3:[function(require,module,exports){
+},{"ngraph.events":5}],3:[function(require,module,exports){
 /**
  * This module provides default settings for three.js graphics. There are a lot
  * of possible configuration parameters, and this file provides reasonable defaults
  */
-var THREE = require('three');
+const THREE = require('three');
 
-/**
- * Default node UI creator. Renders a cube
- */
-module.exports.createNodeUI = createNodeUI;
-
-/**
- * Default link UI creator. Renders a line
- **/
-module.exports.createLinkUI = createLinkUI;
-
-/**
- * Updates cube position
- */
-module.exports.nodeRenderer = nodeRenderer;
-
-/**
- * Updates line position
- */
-module.exports.linkRenderer = linkRenderer;
-
-const NODE_SIZE = 5; // default size of a node square
-const HEIGHT_STEP = 60;
-
-
-function createNodeUI(node) {
-  //console.log('During AddLink');
-  let depth = (node.links &&
-               node.links.length > 0 &&
-               node.links[0].data &&
-               node.links[0].data.depthOfChild) ? node.links[0].data.depthOfChild : 0;
-  //console.log(`Depth from link is: ${depth}`);
+module.exports = function (graph, scene) {
+  const NODE_SIZE = 5; // default size of a node square
+  const HEIGHT_STEP = 60;
+  let maxDepth = 0;
 
   //var nodeMaterial = new THREE.MeshPhongMaterial({ color: 0xff0000 , specular: 0x111111});
-  var nodeMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+  var nodeMaterial = new THREE.MeshBasicMaterial({color: 0xff0000});
   //var nodeGeometry = new THREE.CylinderGeometry( 0, NODE_SIZE*3, NODE_SIZE*3, 3, 1 );
   var nodeGeometry = new THREE.BoxGeometry(NODE_SIZE, NODE_SIZE, NODE_SIZE);
-  var mesh = new THREE.Mesh(nodeGeometry, nodeMaterial);
-  mesh.userData.depth = depth;
-  //mesh.rotation.x = Math.PI / 2;
-  return mesh;
+  
+  var threeGraphics = {
+    /**
+     * Default node UI creator. Renders a cube
+     */
+    createNodeUI: createNodeUI,
+
+    /**
+     * Default link UI creator. Renders a line
+     **/
+    createLinkUI: createLinkUI,
+
+    /**
+     * Updates cube position
+     */
+    nodeRenderer: nodeRenderer,
+
+    /**
+     * Updates line position
+     */
+    linkRenderer: linkRenderer,
+
+    /**
+     * Updates maxDepth value
+     */
+    setMaxDepth: setMaxDepth
+  }
+  return threeGraphics;
+
+  //TODO: Create a point cloud, that updates every time the nodeRenderer is called.
+
+
+  function createNodeUI(node) {
+    //console.log('During AddLink');
+    let depth = (node.links &&
+      node.links.length > 0 &&
+      node.links[0].data &&
+      node.links[0].data.depthOfChild) ? node.links[0].data.depthOfChild : 0;
+    //console.log(`Depth from link is: ${depth}`);
+
+    var mesh = new THREE.Mesh(nodeGeometry, nodeMaterial);
+    mesh.userData.depth = depth;
+    mesh.userData.nodeID = node.id;
+    mesh.userData.seaNodeMesh = null;
+    //mesh.userData.seaNodeMesh = new THREE.Mesh(nodeGeometry, nodeMaterial);
+    return mesh;
+  }
+
+  function createLinkUI(link) {
+    var linkGeometry = new THREE.Geometry();
+    // we don't care about position here. linkRenderer will update it
+    linkGeometry.vertices.push(new THREE.Vector3(0, 0, 0));
+    linkGeometry.vertices.push(new THREE.Vector3(0, 0, 0));
+    //linkGeometry.vertices.push(new THREE.Vector3(0, 0, 0));
+
+    var linkMaterial = new THREE.LineBasicMaterial({
+      color: 0x0000FF
+    });
+    var line = new THREE.Line(linkGeometry, linkMaterial);
+    line.userData.depthOfChild = link.data.depthOfChild;
+    line.userData.lineToSea = false;
+    return line;
+  }
+
+  // This function is called EVERY frame. Be nice.
+  function nodeRenderer(node) {
+    node.position.x = node.pos.x;
+    node.position.y = node.pos.y;
+    if (!node.heighIsset) { //update every frame, based on depth, no. of children, data
+      node.position.z = getNodeHeight(node);
+      node.heighIsset = true;
+    }
+
+    if ((graph.getNode(node.userData.nodeID).data.numberOfChildren === 0) && (node.userData.depth < maxDepth) && (node.userData.seaNodeMesh === null)) {
+      node.userData.seaNodeMesh = new THREE.Mesh(nodeGeometry, nodeMaterial);
+      scene.add(node.userData.seaNodeMesh);
+      //console.log(seaNode);
+      seaNode = node.userData.seaNodeMesh;
+      seaNode.position.x = node.pos.x;
+      seaNode.position.y = node.pos.y;
+      seaNode.position.z = -1 * maxDepth * HEIGHT_STEP;
+    }
+    else if ((graph.getNode(node.userData.nodeID).data.numberOfChildren === 0) && (node.userData.depth < maxDepth)){
+      seaNode = node.userData.seaNodeMesh;
+      seaNode.position.x = node.pos.x;
+      seaNode.position.y = node.pos.y;
+      seaNode.position.z = -1 * maxDepth * HEIGHT_STEP;
+    }
+
+    //console.log(`x: ${node.pos.x}, y: ${node.pos.y}, z: ${node.pos.z}`);
+  }
+
+  function linkRenderer(link) {
+    var from = link.from;
+    var to = link.to;
+    link.geometry.vertices[0].set(from.x, from.y, -1 * (link.userData.depthOfChild - 1) * HEIGHT_STEP);
+    link.geometry.vertices[1].set(to.x, to.y, -1 * (link.userData.depthOfChild) * HEIGHT_STEP);
+
+    // if (link.userData.depthOfChild < maxDepth) {
+    //   link.geometry.vertices[2].set(to.x, to.y, -1 * (maxDepth) * HEIGHT_STEP);
+    // } else {
+    //   link.geometry.vertices[2].set(to.x, to.y, -1 * (link.userData.depthOfChild) * HEIGHT_STEP);
+    // }
+
+    link.geometry.verticesNeedUpdate = true;
+  }
+
+  // tsouk from here onwards
+  function getNodeHeight(node) {
+    return (-1 * node.userData.depth * HEIGHT_STEP);
+  }
+
+  function setMaxDepth(depth) {
+    maxDepth = depth;
+  }
+
+
+}
+},{"three":36}],4:[function(require,module,exports){
+'use strict';
+
+module.exports = Delaunator;
+module.exports.default = Delaunator;
+
+function Delaunator(points, getX, getY) {
+
+    if (!getX) getX = defaultGetX;
+    if (!getY) getY = defaultGetY;
+
+    var minX = Infinity;
+    var minY = Infinity;
+    var maxX = -Infinity;
+    var maxY = -Infinity;
+
+    var coords = this.coords = [];
+    var ids = this.ids = new Uint32Array(points.length);
+
+    for (var i = 0; i < points.length; i++) {
+        var p = points[i];
+        var x = getX(p);
+        var y = getY(p);
+        ids[i] = i;
+        coords[2 * i] = x;
+        coords[2 * i + 1] = y;
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+    }
+
+    var cx = (minX + maxX) / 2;
+    var cy = (minY + maxY) / 2;
+
+    var minDist = Infinity;
+    var i0, i1, i2;
+
+    // pick a seed point close to the centroid
+    for (i = 0; i < points.length; i++) {
+        var d = dist(cx, cy, coords[2 * i], coords[2 * i + 1]);
+        if (d < minDist) {
+            i0 = i;
+            minDist = d;
+        }
+    }
+
+    minDist = Infinity;
+
+    // find the point closest to the seed
+    for (i = 0; i < points.length; i++) {
+        if (i === i0) continue;
+        d = dist(coords[2 * i0], coords[2 * i0 + 1], coords[2 * i], coords[2 * i + 1]);
+        if (d < minDist && d > 0) {
+            i1 = i;
+            minDist = d;
+        }
+    }
+
+    var minRadius = Infinity;
+
+    // find the third point which forms the smallest circumcircle with the first two
+    for (i = 0; i < points.length; i++) {
+        if (i === i0 || i === i1) continue;
+
+        var r = circumradius(
+            coords[2 * i0], coords[2 * i0 + 1],
+            coords[2 * i1], coords[2 * i1 + 1],
+            coords[2 * i], coords[2 * i + 1]);
+
+        if (r < minRadius) {
+            i2 = i;
+            minRadius = r;
+        }
+    }
+
+    if (minRadius === Infinity) {
+        throw new Error('No Delaunay triangulation exists for this input.');
+    }
+
+    // swap the order of the seed points for counter-clockwise orientation
+    if (area(coords[2 * i0], coords[2 * i0 + 1],
+        coords[2 * i1], coords[2 * i1 + 1],
+        coords[2 * i2], coords[2 * i2 + 1]) < 0) {
+
+        var tmp = i1;
+        i1 = i2;
+        i2 = tmp;
+    }
+
+    var i0x = coords[2 * i0];
+    var i0y = coords[2 * i0 + 1];
+    var i1x = coords[2 * i1];
+    var i1y = coords[2 * i1 + 1];
+    var i2x = coords[2 * i2];
+    var i2y = coords[2 * i2 + 1];
+
+    var center = circumcenter(i0x, i0y, i1x, i1y, i2x, i2y);
+    this._cx = center.x;
+    this._cy = center.y;
+
+    // sort the points by distance from the seed triangle circumcenter
+    quicksort(ids, coords, 0, ids.length - 1, center.x, center.y);
+
+    // initialize a hash table for storing edges of the advancing convex hull
+    this._hashSize = Math.ceil(Math.sqrt(points.length));
+    this._hash = [];
+    for (i = 0; i < this._hashSize; i++) this._hash[i] = null;
+
+    // initialize a circular doubly-linked list that will hold an advancing convex hull
+    var e = this.hull = insertNode(coords, i0);
+    this._hashEdge(e);
+    e.t = 0;
+    e = insertNode(coords, i1, e);
+    this._hashEdge(e);
+    e.t = 1;
+    e = insertNode(coords, i2, e);
+    this._hashEdge(e);
+    e.t = 2;
+
+    var maxTriangles = 2 * points.length - 5;
+    var triangles = this.triangles = new Uint32Array(maxTriangles * 3);
+    var halfedges = this.halfedges = new Int32Array(maxTriangles * 3);
+
+    this.trianglesLen = 0;
+
+    this._addTriangle(i0, i1, i2, -1, -1, -1);
+
+    var xp, yp;
+    for (var k = 0; k < ids.length; k++) {
+        i = ids[k];
+        x = coords[2 * i];
+        y = coords[2 * i + 1];
+
+        // skip duplicate points
+        if (x === xp && y === yp) continue;
+        xp = x;
+        yp = y;
+
+        // skip seed triangle points
+        if ((x === i0x && y === i0y) ||
+            (x === i1x && y === i1y) ||
+            (x === i2x && y === i2y)) continue;
+
+        // find a visible edge on the convex hull using edge hash
+        var startKey = this._hashKey(x, y);
+        var key = startKey;
+        var start;
+        do {
+            start = this._hash[key];
+            key = (key + 1) % this._hashSize;
+        } while ((!start || start.removed) && key !== startKey);
+
+        e = start;
+        while (area(x, y, e.x, e.y, e.next.x, e.next.y) >= 0) {
+            e = e.next;
+            if (e === start) {
+                throw new Error('Something is wrong with the input points.');
+            }
+        }
+
+        var walkBack = e === start;
+
+        // add the first triangle from the point
+        var t = this._addTriangle(e.i, i, e.next.i, -1, -1, e.t);
+
+        e.t = t; // keep track of boundary triangles on the hull
+        e = insertNode(coords, i, e);
+
+        // recursively flip triangles from the point until they satisfy the Delaunay condition
+        e.t = this._legalize(t + 2);
+        if (e.prev.prev.t === halfedges[t + 1]) {
+            e.prev.prev.t = t + 2;
+        }
+
+        // walk forward through the hull, adding more triangles and flipping recursively
+        var q = e.next;
+        while (area(x, y, q.x, q.y, q.next.x, q.next.y) < 0) {
+            t = this._addTriangle(q.i, i, q.next.i, q.prev.t, -1, q.t);
+            q.prev.t = this._legalize(t + 2);
+            this.hull = removeNode(q);
+            q = q.next;
+        }
+
+        if (walkBack) {
+            // walk backward from the other side, adding more triangles and flipping
+            q = e.prev;
+            while (area(x, y, q.prev.x, q.prev.y, q.x, q.y) < 0) {
+                t = this._addTriangle(q.prev.i, i, q.i, -1, q.t, q.prev.t);
+                this._legalize(t + 2);
+                q.prev.t = t;
+                this.hull = removeNode(q);
+                q = q.prev;
+            }
+        }
+
+        // save the two new edges in the hash table
+        this._hashEdge(e);
+        this._hashEdge(e.prev);
+    }
+
+    // trim typed triangle mesh arrays
+    this.triangles = triangles.subarray(0, this.trianglesLen);
+    this.halfedges = halfedges.subarray(0, this.trianglesLen);
 }
 
-function createLinkUI(link) {
-  var linkGeometry = new THREE.Geometry();
-  // we don't care about position here. linkRenderer will update it
-  linkGeometry.vertices.push(new THREE.Vector3(0, 0, 0));
-  linkGeometry.vertices.push(new THREE.Vector3(0, 0, 0));
+Delaunator.prototype = {
 
-  var linkMaterial = new THREE.LineBasicMaterial({ color: 0x0000FF });
-  var line = new THREE.Line(linkGeometry, linkMaterial);
-  line.userData.depthOfChild = link.data.depthOfChild;
-  return line;
+    _hashEdge: function (e) {
+        this._hash[this._hashKey(e.x, e.y)] = e;
+    },
+
+    _hashKey: function (x, y) {
+        var dx = x - this._cx;
+        var dy = y - this._cy;
+        // use pseudo-angle: a measure that monotonically increases
+        // with real angle, but doesn't require expensive trigonometry
+        var p = 1 - dx / (Math.abs(dx) + Math.abs(dy));
+        return Math.floor((2 + (dy < 0 ? -p : p)) / 4 * this._hashSize);
+    },
+
+    _legalize: function (a) {
+        var triangles = this.triangles;
+        var coords = this.coords;
+        var halfedges = this.halfedges;
+
+        var b = halfedges[a];
+
+        var a0 = a - a % 3;
+        var b0 = b - b % 3;
+
+        var al = a0 + (a + 1) % 3;
+        var ar = a0 + (a + 2) % 3;
+        var bl = b0 + (b + 2) % 3;
+
+        var p0 = triangles[ar];
+        var pr = triangles[a];
+        var pl = triangles[al];
+        var p1 = triangles[bl];
+
+        var illegal = inCircle(
+            coords[2 * p0], coords[2 * p0 + 1],
+            coords[2 * pr], coords[2 * pr + 1],
+            coords[2 * pl], coords[2 * pl + 1],
+            coords[2 * p1], coords[2 * p1 + 1]);
+
+        if (illegal) {
+            triangles[a] = p1;
+            triangles[b] = p0;
+
+            this._link(a, halfedges[bl]);
+            this._link(b, halfedges[ar]);
+            this._link(ar, bl);
+
+            var br = b0 + (b + 1) % 3;
+
+            this._legalize(a);
+            return this._legalize(br);
+        }
+
+        return ar;
+    },
+
+    _link: function (a, b) {
+        this.halfedges[a] = b;
+        if (b !== -1) this.halfedges[b] = a;
+    },
+
+    // add a new triangle given vertex indices and adjacent half-edge ids
+    _addTriangle: function (i0, i1, i2, a, b, c) {
+        var t = this.trianglesLen;
+
+        this.triangles[t] = i0;
+        this.triangles[t + 1] = i1;
+        this.triangles[t + 2] = i2;
+
+        this._link(t, a);
+        this._link(t + 1, b);
+        this._link(t + 2, c);
+
+        this.trianglesLen += 3;
+
+        return t;
+    }
+};
+
+function dist(ax, ay, bx, by) {
+    var dx = ax - bx;
+    var dy = ay - by;
+    return dx * dx + dy * dy;
 }
 
-// This function is called EVERY frame. Be nice.
-function nodeRenderer(node) {
-  node.position.x = node.pos.x;
-  node.position.y = node.pos.y;
-  if (!node.heighIsset) { //update every frame, based on depth, no. of children, data
-    node.position.z = getNodeHeight(node);
-    node.heighIsset = true;
-  }  // TODO: get node info and update every frame....
-  //console.log(`x: ${node.pos.x}, y: ${node.pos.y}, z: ${node.pos.z}`);
+function area(px, py, qx, qy, rx, ry) {
+    return (qy - py) * (rx - qx) - (qx - px) * (ry - qy);
 }
 
-function linkRenderer(link) {
-  var from = link.from;
-  var to = link.to;
-  link.geometry.vertices[0].set(from.x, from.y, -1 * (link.userData.depthOfChild - 1) * HEIGHT_STEP);
-  link.geometry.vertices[1].set(to.x, to.y, -1 * (link.userData.depthOfChild) * HEIGHT_STEP);
-  link.geometry.verticesNeedUpdate = true;
+function inCircle(ax, ay, bx, by, cx, cy, px, py) {
+    ax -= px;
+    ay -= py;
+    bx -= px;
+    by -= py;
+    cx -= px;
+    cy -= py;
+
+    var ap = ax * ax + ay * ay;
+    var bp = bx * bx + by * by;
+    var cp = cx * cx + cy * cy;
+
+    return ax * (by * cp - bp * cy) -
+           ay * (bx * cp - bp * cx) +
+           ap * (bx * cy - by * cx) < 0;
 }
 
-// tsouk from here onwards
-function getNodeHeight(node) {
-  return ( -1 * node.userData.depth * HEIGHT_STEP);
+function circumradius(ax, ay, bx, by, cx, cy) {
+    bx -= ax;
+    by -= ay;
+    cx -= ax;
+    cy -= ay;
+
+    var bl = bx * bx + by * by;
+    var cl = cx * cx + cy * cy;
+
+    if (bl === 0 || cl === 0) return Infinity;
+
+    var d = bx * cy - by * cx;
+    if (d === 0) return Infinity;
+
+    var x = (cy * bl - by * cl) * 0.5 / d;
+    var y = (bx * cl - cx * bl) * 0.5 / d;
+
+    return x * x + y * y;
 }
 
-},{"three":35}],4:[function(require,module,exports){
+function circumcenter(ax, ay, bx, by, cx, cy) {
+    bx -= ax;
+    by -= ay;
+    cx -= ax;
+    cy -= ay;
+
+    var bl = bx * bx + by * by;
+    var cl = cx * cx + cy * cy;
+
+    var d = bx * cy - by * cx;
+
+    var x = (cy * bl - by * cl) * 0.5 / d;
+    var y = (bx * cl - cx * bl) * 0.5 / d;
+
+    return {
+        x: ax + x,
+        y: ay + y
+    };
+}
+
+// create a new node in a doubly linked list
+function insertNode(coords, i, prev) {
+    var node = {
+        i: i,
+        x: coords[2 * i],
+        y: coords[2 * i + 1],
+        t: 0,
+        prev: null,
+        next: null,
+        removed: false
+    };
+
+    if (!prev) {
+        node.prev = node;
+        node.next = node;
+
+    } else {
+        node.next = prev.next;
+        node.prev = prev;
+        prev.next.prev = node;
+        prev.next = node;
+    }
+    return node;
+}
+
+function removeNode(node) {
+    node.prev.next = node.next;
+    node.next.prev = node.prev;
+    node.removed = true;
+    return node.prev;
+}
+
+function quicksort(ids, coords, left, right, cx, cy) {
+    var i, j, temp;
+
+    if (right - left <= 20) {
+        for (i = left + 1; i <= right; i++) {
+            temp = ids[i];
+            j = i - 1;
+            while (j >= left && compare(coords, ids[j], temp, cx, cy) > 0) ids[j + 1] = ids[j--];
+            ids[j + 1] = temp;
+        }
+    } else {
+        var median = (left + right) >> 1;
+        i = left + 1;
+        j = right;
+        swap(ids, median, i);
+        if (compare(coords, ids[left], ids[right], cx, cy) > 0) swap(ids, left, right);
+        if (compare(coords, ids[i], ids[right], cx, cy) > 0) swap(ids, i, right);
+        if (compare(coords, ids[left], ids[i], cx, cy) > 0) swap(ids, left, i);
+
+        temp = ids[i];
+        while (true) {
+            do i++; while (compare(coords, ids[i], temp, cx, cy) < 0);
+            do j--; while (compare(coords, ids[j], temp, cx, cy) > 0);
+            if (j < i) break;
+            swap(ids, i, j);
+        }
+        ids[left + 1] = ids[j];
+        ids[j] = temp;
+
+        if (right - i + 1 >= j - left) {
+            quicksort(ids, coords, i, right, cx, cy);
+            quicksort(ids, coords, left, j - 1, cx, cy);
+        } else {
+            quicksort(ids, coords, left, j - 1, cx, cy);
+            quicksort(ids, coords, i, right, cx, cy);
+        }
+    }
+}
+
+function compare(coords, i, j, cx, cy) {
+    var d1 = dist(coords[2 * i], coords[2 * i + 1], cx, cy);
+    var d2 = dist(coords[2 * j], coords[2 * j + 1], cx, cy);
+    return (d1 - d2) || (coords[2 * i] - coords[2 * j]) || (coords[2 * i + 1] - coords[2 * j + 1]);
+}
+
+function swap(arr, i, j) {
+    var tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+}
+
+function defaultGetX(p) {
+    return p[0];
+}
+function defaultGetY(p) {
+    return p[1];
+}
+
+},{}],5:[function(require,module,exports){
 module.exports = function(subject) {
   validateSubject(subject);
 
@@ -393,7 +888,7 @@ function validateSubject(subject) {
   }
 }
 
-},{}],5:[function(require,module,exports){
+},{}],6:[function(require,module,exports){
 module.exports = exposeProperties;
 
 /**
@@ -439,7 +934,7 @@ function augment(source, target, key) {
   }
 }
 
-},{}],6:[function(require,module,exports){
+},{}],7:[function(require,module,exports){
 module.exports = createLayout;
 module.exports.simulator = require('ngraph.physics.simulator');
 
@@ -754,7 +1249,7 @@ function createLayout(graph, physicsSettings) {
 
 function noop() { }
 
-},{"ngraph.events":4,"ngraph.physics.simulator":16}],7:[function(require,module,exports){
+},{"ngraph.events":5,"ngraph.physics.simulator":17}],8:[function(require,module,exports){
 /**
  * This module provides all required forces to regular ngraph.physics.simulator
  * to make it 3D simulator. Ideally ngraph.physics.simulator should operate
@@ -778,7 +1273,7 @@ function createLayout(graph, physicsSettings) {
   return createLayout.get2dLayout(graph, physicsSettings);
 }
 
-},{"./lib/bounds":8,"./lib/createBody":9,"./lib/dragForce":10,"./lib/eulerIntegrator":11,"./lib/springForce":12,"ngraph.forcelayout":6,"ngraph.merge":14,"ngraph.quadtreebh3d":27}],8:[function(require,module,exports){
+},{"./lib/bounds":9,"./lib/createBody":10,"./lib/dragForce":11,"./lib/eulerIntegrator":12,"./lib/springForce":13,"ngraph.forcelayout":7,"ngraph.merge":15,"ngraph.quadtreebh3d":28}],9:[function(require,module,exports){
 module.exports = function (bodies, settings) {
   var random = require('ngraph.random').random(42);
   var boundingBox =  { x1: 0, y1: 0, z1: 0, x2: 0, y2: 0, z2: 0 };
@@ -877,14 +1372,14 @@ module.exports = function (bodies, settings) {
   }
 };
 
-},{"ngraph.random":31}],9:[function(require,module,exports){
+},{"ngraph.random":32}],10:[function(require,module,exports){
 var physics = require('ngraph.physics.primitives');
 
 module.exports = function(pos) {
   return new physics.Body3d(pos);
 }
 
-},{"ngraph.physics.primitives":15}],10:[function(require,module,exports){
+},{"ngraph.physics.primitives":16}],11:[function(require,module,exports){
 /**
  * Represents 3d drag force, which reduces force value on each step by given
  * coefficient.
@@ -914,7 +1409,7 @@ module.exports = function (options) {
   return api;
 };
 
-},{"ngraph.expose":5,"ngraph.merge":14}],11:[function(require,module,exports){
+},{"ngraph.expose":6,"ngraph.merge":15}],12:[function(require,module,exports){
 /**
  * Performs 3d forces integration, using given timestep. Uses Euler method to solve
  * differential equation (http://en.wikipedia.org/wiki/Euler_method ).
@@ -964,7 +1459,7 @@ function integrate(bodies, timeStep) {
   return (tx * tx + ty * ty + tz * tz)/bodies.length;
 }
 
-},{}],12:[function(require,module,exports){
+},{}],13:[function(require,module,exports){
 /**
  * Represents 3d spring force, which updates forces acting on two bodies, conntected
  * by a spring.
@@ -1020,7 +1515,7 @@ module.exports = function (options) {
   return api;
 }
 
-},{"ngraph.expose":5,"ngraph.merge":14,"ngraph.random":31}],13:[function(require,module,exports){
+},{"ngraph.expose":6,"ngraph.merge":15,"ngraph.random":32}],14:[function(require,module,exports){
 /**
  * @fileOverview Contains definition of the core graph object.
  */
@@ -1599,7 +2094,7 @@ function makeLinkId(fromId, toId) {
   return hashCode(fromId.toString() + '👉 ' + toId.toString());
 }
 
-},{"ngraph.events":4}],14:[function(require,module,exports){
+},{"ngraph.events":5}],15:[function(require,module,exports){
 module.exports = merge;
 
 /**
@@ -1632,7 +2127,7 @@ function merge(target, options) {
   return target;
 }
 
-},{}],15:[function(require,module,exports){
+},{}],16:[function(require,module,exports){
 module.exports = {
   Body: Body,
   Vector2d: Vector2d,
@@ -1699,7 +2194,7 @@ Vector3d.prototype.reset = function () {
   this.x = this.y = this.z = 0;
 };
 
-},{}],16:[function(require,module,exports){
+},{}],17:[function(require,module,exports){
 /**
  * Manages a simulation of physical forces acting on bodies and springs.
  */
@@ -1977,7 +2472,7 @@ function physicsSimulator(settings) {
   }
 };
 
-},{"./lib/bounds":17,"./lib/createBody":18,"./lib/dragForce":19,"./lib/eulerIntegrator":20,"./lib/spring":21,"./lib/springForce":22,"ngraph.events":4,"ngraph.expose":5,"ngraph.merge":14,"ngraph.quadtreebh":23}],17:[function(require,module,exports){
+},{"./lib/bounds":18,"./lib/createBody":19,"./lib/dragForce":20,"./lib/eulerIntegrator":21,"./lib/spring":22,"./lib/springForce":23,"ngraph.events":5,"ngraph.expose":6,"ngraph.merge":15,"ngraph.quadtreebh":24}],18:[function(require,module,exports){
 module.exports = function (bodies, settings) {
   var random = require('ngraph.random').random(42);
   var boundingBox =  { x1: 0, y1: 0, x2: 0, y2: 0 };
@@ -2059,14 +2554,14 @@ module.exports = function (bodies, settings) {
   }
 }
 
-},{"ngraph.random":31}],18:[function(require,module,exports){
+},{"ngraph.random":32}],19:[function(require,module,exports){
 var physics = require('ngraph.physics.primitives');
 
 module.exports = function(pos) {
   return new physics.Body(pos);
 }
 
-},{"ngraph.physics.primitives":15}],19:[function(require,module,exports){
+},{"ngraph.physics.primitives":16}],20:[function(require,module,exports){
 /**
  * Represents drag force, which reduces force value on each step by given
  * coefficient.
@@ -2095,7 +2590,7 @@ module.exports = function (options) {
   return api;
 };
 
-},{"ngraph.expose":5,"ngraph.merge":14}],20:[function(require,module,exports){
+},{"ngraph.expose":6,"ngraph.merge":15}],21:[function(require,module,exports){
 /**
  * Performs forces integration, using given timestep. Uses Euler method to solve
  * differential equation (http://en.wikipedia.org/wiki/Euler_method ).
@@ -2142,7 +2637,7 @@ function integrate(bodies, timeStep) {
   return (tx * tx + ty * ty)/max;
 }
 
-},{}],21:[function(require,module,exports){
+},{}],22:[function(require,module,exports){
 module.exports = Spring;
 
 /**
@@ -2158,7 +2653,7 @@ function Spring(fromBody, toBody, length, coeff, weight) {
     this.weight = typeof weight === 'number' ? weight : 1;
 };
 
-},{}],22:[function(require,module,exports){
+},{}],23:[function(require,module,exports){
 /**
  * Represents spring force, which updates forces acting on two bodies, conntected
  * by a spring.
@@ -2210,7 +2705,7 @@ module.exports = function (options) {
   return api;
 }
 
-},{"ngraph.expose":5,"ngraph.merge":14,"ngraph.random":31}],23:[function(require,module,exports){
+},{"ngraph.expose":6,"ngraph.merge":15,"ngraph.random":32}],24:[function(require,module,exports){
 /**
  * This is Barnes Hut simulation algorithm for 2d case. Implementation
  * is highly optimized (avoids recusion and gc pressure)
@@ -2536,7 +3031,7 @@ function setChild(node, idx, child) {
   else if (idx === 3) node.quad3 = child;
 }
 
-},{"./insertStack":24,"./isSamePosition":25,"./node":26,"ngraph.random":31}],24:[function(require,module,exports){
+},{"./insertStack":25,"./isSamePosition":26,"./node":27,"ngraph.random":32}],25:[function(require,module,exports){
 module.exports = InsertStack;
 
 /**
@@ -2580,7 +3075,7 @@ function InsertStackElement(node, body) {
     this.body = body; // physical body which needs to be inserted to node
 }
 
-},{}],25:[function(require,module,exports){
+},{}],26:[function(require,module,exports){
 module.exports = function isSamePosition(point1, point2) {
     var dx = Math.abs(point1.x - point2.x);
     var dy = Math.abs(point1.y - point2.y);
@@ -2588,7 +3083,7 @@ module.exports = function isSamePosition(point1, point2) {
     return (dx < 1e-8 && dy < 1e-8);
 };
 
-},{}],26:[function(require,module,exports){
+},{}],27:[function(require,module,exports){
 /**
  * Internal data structure to represent 2D QuadTree node
  */
@@ -2620,7 +3115,7 @@ module.exports = function Node() {
   this.right = 0;
 };
 
-},{}],27:[function(require,module,exports){
+},{}],28:[function(require,module,exports){
 /**
  * This is Barnes Hut simulation algorithm for 3d case. Implementation
  * is highly optimized (avoids recusion and gc pressure)
@@ -3015,7 +3510,7 @@ function setChild(node, idx, child) {
   else if (idx === 7) node.quad7 = child;
 }
 
-},{"./insertStack":28,"./isSamePosition":29,"./node":30,"ngraph.random":31}],28:[function(require,module,exports){
+},{"./insertStack":29,"./isSamePosition":30,"./node":31,"ngraph.random":32}],29:[function(require,module,exports){
 module.exports = InsertStack;
 
 /**
@@ -3059,7 +3554,7 @@ function InsertStackElement(node, body) {
     this.body = body; // physical body which needs to be inserted to node
 }
 
-},{}],29:[function(require,module,exports){
+},{}],30:[function(require,module,exports){
 module.exports = function isSamePosition(point1, point2) {
     var dx = Math.abs(point1.x - point2.x);
     var dy = Math.abs(point1.y - point2.y);
@@ -3068,7 +3563,7 @@ module.exports = function isSamePosition(point1, point2) {
     return (dx < 1e-8 && dy < 1e-8 && dz < 1e-8);
 };
 
-},{}],30:[function(require,module,exports){
+},{}],31:[function(require,module,exports){
 /**
  * Internal data structure to represent 3D QuadTree node
  */
@@ -3112,7 +3607,7 @@ module.exports = function Node() {
   this.back = 0;
 };
 
-},{}],31:[function(require,module,exports){
+},{}],32:[function(require,module,exports){
 module.exports = {
   random: random,
   randomIterator: randomIterator
@@ -3199,8 +3694,10 @@ function randomIterator(array, customRandom) {
     };
 }
 
-},{}],32:[function(require,module,exports){
+},{}],33:[function(require,module,exports){
 var THREE = require('three');
+const delaunator = require('delaunator')
+console.log(delaunator);
 
 module.exports = function (graph, settings) {
   var merge = require('ngraph.merge');
@@ -3215,6 +3712,7 @@ module.exports = function (graph, settings) {
   var renderer = createRenderer(settings);
   var camera = createCamera(settings);
   var scene = settings.scene || new THREE.Scene();
+  let delaunay;
 
   var defaults = require('./lib/defaults');
 
@@ -3442,8 +3940,38 @@ module.exports = function (graph, settings) {
       beforeFrameRender();
     }
     // todo: this adds GC pressure. Remove functional iterators
-    Object.keys(linkUI).forEach(renderLink);
+    //Object.keys(linkUI).forEach(renderLink);
     Object.keys(nodeUI).forEach(renderNode);
+
+    // turn off line rendering, you still need the nodes... maybe
+    // ngraph.three actually needs npm install the delaunator...
+    // --------------
+
+
+    // update ngraph.three with these changes before you rm -rf node_modules
+    // if you turn off node rendering then you need to make the seaNode here
+
+    // create the geometry outside here and add to scene, like an initGeometry()
+
+    // maybe run the delaunator every 60 frames. Debounce it.
+    delaunay = new Delaunator(nodeUI, (node) => node.pos.x,  (nodeId) => node.pos.y);
+    console.log(delaunay.triangles);
+
+    // for each node, push([node.x,node.y]) into a points[] array // Object.keys(nodeUI).forEach(callback);
+    // also add the seaNodes! remember, there is no LINE rendering now
+    // ...maybe the graph has that already
+    // YOU CAN push the whole node, or at least add the depth.
+
+    // run the delaunator on the array (if whole node was use, use the getters)
+    // get the triangle indices that map to the points[]
+
+    // push their coordinates all in geometry.vertices array, and z = -1 * depth * HEIGHT_STEP
+    // make a face for all these, every 3 of them
+    // for (var i = 0; i < geometry.vertices.length; i += 3) {
+    //   var face = new THREE.Face3( i, i+1, i+2, normal, color, materialIndex );
+    //   geometry.faces.push( face );
+    // }
+    // 
     renderer.render(scene, camera);
   }
 
@@ -3578,7 +4106,7 @@ module.exports = function (graph, settings) {
   }
 };
 
-},{"./lib/defaults":33,"ngraph.forcelayout3d":7,"ngraph.merge":14,"three":35,"three.trackball":34}],33:[function(require,module,exports){
+},{"./lib/defaults":34,"delaunator":4,"ngraph.forcelayout3d":8,"ngraph.merge":15,"three":36,"three.trackball":35}],34:[function(require,module,exports){
 /**
  * This module provides default settings for three.js graphics. There are a lot
  * of possible configuration parameters, and this file provides reasonable defaults
@@ -3638,7 +4166,7 @@ function linkRenderer(link) {
   link.geometry.verticesNeedUpdate = true;
 }
 
-},{"three":35}],34:[function(require,module,exports){
+},{"three":36}],35:[function(require,module,exports){
 /**
  * @author Eberhard Graether / http://egraether.com/
  * @author Mark Lundin / http://mark-lundin.com
@@ -4257,7 +4785,7 @@ function preventEvent( event ) { event.preventDefault(); }
 
 Trackball.prototype = Object.create(THREE.EventDispatcher.prototype);
 
-},{"three":35}],35:[function(require,module,exports){
+},{"three":36}],36:[function(require,module,exports){
 (function (global, factory) {
 	typeof exports === 'object' && typeof module !== 'undefined' ? factory(exports) :
 	typeof define === 'function' && define.amd ? define(['exports'], factory) :

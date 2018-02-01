@@ -1491,7 +1491,8 @@ function createRoot(graph, domNode) {
   rootId = (domNode.tagName || domNode.nodeName);
 
   graph.addNode(rootId, {
-    depth: 0
+    depth: 0,
+    numberOfChildren: 0
   });
 
   graph.ilandom = {};
@@ -1527,8 +1528,9 @@ function recurseBF(graph, treeHeadNode) {
       children = parent.childNodes;
 
       //I should probably check for ...
+      // TODO: only go through children that are type 1?
       if (children) {
-        for (i = 0, len = children.length; i < len; i++) {
+        for (i = 0, len = children.length; i < len ; i++) { // (i < len && i < 24) works for simplified iland graphs, but probably should only do that to the head... 
           if (children[i].nodeType === 1) {
             //console.log('adding child to stack');
             childNodeId = addNewChildNodeToParent(graph, parentNodeId, children[i], depth);
@@ -1555,17 +1557,19 @@ function addNewChildNodeToParent(graph, parentNodeId, child, depth) {
   nodeCount++;
   childNodeId = child.tagName + '-' + nodeCount;
 
-  // console.group();
+  //console.group();
   // console.log('Before AddLink');
+  graph.getNode(parentNodeId).data.numberOfChildren++;
   graph.addLink(parentNodeId, childNodeId, {depthOfChild: depth + 1});
   // console.log('After AddLink');
 
   var justAddedNode = graph.getNode(childNodeId);
+  
   if (justAddedNode.data) {
     justAddedNode.data.depth = depth + 1;
   }
   else {
-    justAddedNode.data = {depth: depth + 1};
+    justAddedNode.data = {depth: depth + 1, numberOfChildren: 0};
   }
 
   events.fire('added', parentNodeId, childNodeId);

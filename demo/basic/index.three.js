@@ -1,6 +1,5 @@
 const graph = require('ngraph.graph')();
 const recurseBF = require('../../lib/recurseBFngraph');
-const threeGraphics = require('../../lib/threeGraphics');
 const eventify = require('ngraph.events');
 const nthree = require('ngraph.three');
 const THREE = require('three');
@@ -18,15 +17,16 @@ var physicsSettings = {
 var layout3d = require('ngraph.forcelayout3d');
 var layout2d = layout3d.get2dLayout; // this on it's own is not enough, you need to tell the rendering function to set the z=0
 var graphics = nthree(graph, {physicsSettings : physicsSettings, layout: layout2d(graph, physicsSettings)});
+const threeGraphics = require('../../lib/threeGraphics')(graph, graphics.scene);
 graphics.createNodeUI(threeGraphics.createNodeUI);
 graphics.createLinkUI(threeGraphics.createLinkUI);
 graphics.renderNode(threeGraphics.nodeRenderer);
 graphics.renderLink(threeGraphics.linkRenderer);
 
-graphics.scene.fog = new graphics.THREE.FogExp2( 0xccccee, 0.001 );
+// graphics.scene.fog = new graphics.THREE.FogExp2( 0xccccee, 0.001 );
 graphics.scene.background = new graphics.THREE.Color( 0xeeeeee );
-var directionalLight = new THREE.DirectionalLight( 0xffffff, 1 );
-graphics.scene.add( directionalLight );
+// var directionalLight = new THREE.DirectionalLight( 0xffffff, 1 );
+// graphics.scene.add( directionalLight );
 
 graphics.run(); // begin animation loop
 
@@ -39,10 +39,7 @@ function start3dgraph (data) {
 
   recurseBF.events.on('cleared', function() {
     console.log(`Finished adding nodes, stable, maxDepth: ${graph.ilandom.maxDepth}`);
-    // got to stop the fucking layout here, did that do it?
-    // graphics.layout.dispose();
-    // don't think so.
-
+    threeGraphics.setMaxDepth(graph.ilandom.maxDepth);
 
     // graph.forEachNode(function(nodeUI){
     //   nodeUI.color = '0x' + recurseBF.intToRGB(recurseBF.hashCode(regex.exec(nodeUI.id)[0] + colorPalette));
@@ -53,7 +50,9 @@ function start3dgraph (data) {
 
   recurseBF.events.on('added', function( parentNodeId, childNodeId ) {
     // console.log(`id: ${graph.getNode(childNodeId).id}, data: ${graph.getNode(childNodeId).data}`);
-    // console.groupEnd();
+    threeGraphics.setMaxDepth(graph.ilandom.maxDepth);
+    //console.groupEnd();
+
     //renderer.graph().addLink(parentNodeId, childNodeId);
     // graph.forEachNode(function(nodeUI){
     //   myArray = regex.exec(nodeUI.id);
