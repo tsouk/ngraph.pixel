@@ -1463,7 +1463,7 @@ const stepTime = 0.2 * SEC; //this one can crash your shizzle
 const nodeSize = 1000;
 const nodeColor = '#' + (Math.floor(Math.random() * 16777215).toString(16) + '000000').substr(0, 6);
 
-events.fire('foo');
+events.fire('foo'); //huh???
 
 function getHtmlNode(domObject) {
   var i = 0;
@@ -1478,11 +1478,6 @@ function getHtmlNode(domObject) {
 }
 
 function createRoot(graph, domNode) {
-  // Sigma: graphInstance.graph.nodes()
-  // ngrpah: graph.getNodesCount
-  //
-  // Sigma: graph.addNode
-  // Ngraph: graph.addNode
   if (graph.getNodesCount() > 0) {
     console.log("Error creating root object");
     return;
@@ -1505,12 +1500,12 @@ function recurseBF(graph, treeHeadNode) {
   rootId = createRoot(graph, treeHeadNode);
   events.fire('createRoot');
 
-  var stack = [{
+  var queue = [{
     depth: 0,
     nodeId: rootId,
     element: treeHeadNode
   }];
-  var stackItem = 0; //could use that too
+  var queueItem = 0; //could use that too
   var current;
   var parent;
   var children, i, len;
@@ -1518,23 +1513,27 @@ function recurseBF(graph, treeHeadNode) {
   var childNodeId;
 
   var nodeIntervalId = setInterval(function () {
-    if (current = stack[stackItem++]) {
-      // console.log('popped next child that is now a parent, from stack');
+    if (current = queue.shift()) {
+      let hasNoType1Children = true;
+      // console.log('shifted next child that is now a parent, from queue');
+      // for something like DFS ("show children -> traverse depth first") do .pop()
 
       depth = current.depth;
       if (depth > graph.ilandom.maxDepth) { graph.ilandom.maxDepth = depth; }
+      
       parent = current.element;
       parentNodeId = current.nodeId;
       children = parent.childNodes;
 
       //I should probably check for ...
       // TODO: only go through children that are type 1?
-      if (children) {
-        for (i = 0, len = children.length; i < len ; i++) { // (i < len && i < 24) works for simplified iland graphs, but probably should only do that to the head... 
-          if (children[i].nodeType === 1) {
-            //console.log('adding child to stack');
+      if ( children ) {
+        for ( i = 0, len = children.length; i < len ; i++ ) { // (i < len && i < 24) works for simplified iland graphs, but probably should only do that to the head... 
+          if ( children[i].nodeType === 1 ) {
+            hasNoType1Children = false;
+            //console.log('adding child to queue');
             childNodeId = addNewChildNodeToParent(graph, parentNodeId, children[i], depth);
-            stack.push({ //pass args via object or array
+            queue.push({ //pass args via object or array
               element: children[i],
               nodeId: childNodeId,
               depth: depth + 1
@@ -1542,6 +1541,12 @@ function recurseBF(graph, treeHeadNode) {
           }
         }
       }
+
+      // Not sure I want to do that here...
+      // if (hasNoType1Children)  {
+      //   console.log(`${parentNodeId}: needs a Sea Node!`);
+      //   graph.getNode(parentNodeId).data.needSeaNode = true;
+      // }
     } else {
       clearInterval(nodeIntervalId);
       events.fire('cleared');
@@ -1569,7 +1574,7 @@ function addNewChildNodeToParent(graph, parentNodeId, child, depth) {
     justAddedNode.data.depth = depth + 1;
   }
   else {
-    justAddedNode.data = {depth: depth + 1, numberOfChildren: 0};
+    justAddedNode.data = {depth: depth + 1, numberOfChildren: 0, needSeaNode: false};
   }
 
   events.fire('added', parentNodeId, childNodeId);
