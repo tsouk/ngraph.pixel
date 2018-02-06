@@ -5,6 +5,8 @@ const eventify = require('ngraph.events');
 const nthree = require('ngraph.three');
 const THREE = require('three');
 
+const MAX_CHILDREN_PER_NODE = 12;
+
 // Configure
 var physicsSettings = {
   springLength: 30,
@@ -15,40 +17,41 @@ var physicsSettings = {
   timeStep: 10
 };
 
-// What is the max number of nodes?
-
-var layout3d = require('ngraph.forcelayout3d');
-var layout2d = layout3d.get2dLayout; // this on it's own is not enough, you need to tell the rendering function to set the z=0
-var graphics = nthree(graph, {physicsSettings : physicsSettings, layout: layout2d(graph, physicsSettings)});
-const threeGraphics = require('../../lib/threeGraphics')(graph, graphics.scene);
-graphics.createNodeUI(threeGraphics.createNodeUI);
-graphics.createLinkUI(threeGraphics.createLinkUI);
-graphics.renderNode(threeGraphics.nodeRenderer);
-graphics.renderLink(threeGraphics.linkRenderer);
-
-// graphics.scene.fog = new graphics.THREE.FogExp2( 0xccccee, 0.001 );
-graphics.scene.background = new graphics.THREE.Color( 0xeeeeee );
-graphics.run(); // begin animation loop
 
 function start3dgraph (data) {
-  recurseBF.recurseBF(graph, recurseBF.getHtmlNode(data));
-  recurseBF.events.on('cleared', function() {
-    console.log(`Finished adding nodes, stable, maxDepth: ${graph.ilandom.maxDepth}`);
-    threeGraphics.setMaxDepth(graph.ilandom.maxDepth);
-    graphics.isStable();
+  // What is the max number of nodes?
+  let maxDepth = recurseBF.findMaxDepth(recurseBF.getHtmlNode(data), MAX_CHILDREN_PER_NODE);
+  let maxParticleCount = recurseBF.getChildrenCount();
+
+  var layout3d = require('ngraph.forcelayout3d');
+  var layout2d = layout3d.get2dLayout; // this on it's own is not enough, you need to tell the rendering function to set the z=0
+  var graphics = nthree(graph, {physicsSettings : physicsSettings, layout: layout2d(graph, physicsSettings)}, maxParticleCount, maxDepth);
+  const threeGraphics = require('../../lib/threeGraphics')(graph, graphics.scene);
+  graphics.createNodeUI(threeGraphics.createNodeUI);
+  graphics.createLinkUI(threeGraphics.createLinkUI);
+  graphics.renderNode(threeGraphics.nodeRenderer);
+  graphics.renderLink(threeGraphics.linkRenderer);
+
+  // graphics.scene.fog = new graphics.THREE.FogExp2( 0xccccee, 0.001 );
+  graphics.scene.background = new graphics.THREE.Color( 0xeeeeee );
+  graphics.run(); // begin animation loop
+  //graphics.setMaxDepth(maxDepth);
+  //graphics.setMaxParticleCount(recurseBF.getChildrenCount());
+  recurseBF.recurseBF(graph, recurseBF.getHtmlNode(data), MAX_CHILDREN_PER_NODE);
+  
+  recurseBF.events.on('added', function( parentNodeId, childNodeId ) {
+    graphics.resetStable();
   });
 
-  recurseBF.events.on('added', function( parentNodeId, childNodeId ) {
-    // console.log(`id: ${graph.getNode(childNodeId).id}, data: ${graph.getNode(childNodeId).data}`);
-    threeGraphics.setMaxDepth(graph.ilandom.maxDepth);
-    //console.groupEnd();
-    graphics.resetStable();
+  recurseBF.events.on('cleared', function() {
+    console.log(`Finished adding nodes, stable, maxDepth: ${maxDepth}`);
+    graphics.isStable();
   });
 }
 
 if (window) {
   window.start3dgraph = start3dgraph;
-  window.scene = graphics.scene;
+  //window.scene = graphics.scene;
   window.THREE = THREE;
 }
 },{"../../lib/recurseBFngraph-three":2,"../../lib/threeGraphics":3,"ngraph.events":8,"ngraph.forcelayout3d":11,"ngraph.graph":17,"ngraph.three":36,"three":44}],2:[function(require,module,exports){
@@ -64,6 +67,8 @@ const finaleEaseTime = 5 * SEC;
 const stepTime = 0.2 * SEC; //this one can crash your shizzle
 const nodeSize = 1000;
 const nodeColor = '#' + (Math.floor(Math.random() * 16777215).toString(16) + '000000').substr(0, 6);
+let maxDepth = 0;
+childrenCount = 0;
 
 events.fire('foo'); //huh???
 
@@ -98,7 +103,7 @@ function createRoot(graph, domNode) {
   return rootId;
 }
 
-function recurseBF(graph, treeHeadNode) {
+function recurseBF(graph, treeHeadNode, MAX_CHILDREN_PER_NODE = Infinity) {
   rootId = createRoot(graph, treeHeadNode);
   events.fire('createRoot');
 
@@ -130,7 +135,7 @@ function recurseBF(graph, treeHeadNode) {
       //I should probably check for ...
       // TODO: only go through children that are type 1?
       if ( children ) {
-        for ( i = 0, len = children.length; i < len ; i++ ) { // (i < len && i < 24) works for simplified iland graphs, but probably should only do that to the head... 
+        for ( i = 0, len = children.length; i < len && MAX_CHILDREN_PER_NODE; i++ ) { // (i < len && i < 12) works for simplified iland graphs, but probably should only do that to the head... 
           if ( children[i].nodeType === 1 ) {
             hasNoType1Children = false;
             //console.log('adding child to queue');
@@ -147,7 +152,7 @@ function recurseBF(graph, treeHeadNode) {
       // Not sure I want to do that here...
       if (hasNoType1Children)  {
         //console.log(`${parentNodeId}: needs a Sea Node!`);
-        addNewChildNodeToParent(graph, parentNodeId, 'seaNode', null);
+        addNewChildNodeToParent(graph, parentNodeId, 'seaNode', maxDepth);
         //graph.getNode(parentNodeId).data.needSeaNode = true;
       }
     } else {
@@ -185,6 +190,50 @@ function addNewChildNodeToParent(graph, parentNodeId, child, depth) {
   return childNodeId;
 }
 
+function findMaxDepth(treeHeadNode, MAX_CHILDREN_PER_NODE = Infinity) {
+  rootId = (treeHeadNode.tagName || treeHeadNode.nodeName);
+
+  var queue = [{
+    depth: 0,
+    element: treeHeadNode
+  }];
+  var queueItem = 0; //could use that too
+  var current;
+  var parent;
+  var children, i, len;
+  var depth;
+
+  while (current = queue.shift()) {
+    let hasNoType1Children = true;
+    if (current.depth > maxDepth) { maxDepth = current.depth; }
+    
+    parent = current.element;
+    children = parent.childNodes;
+
+    if ( children ) {
+      for ( i = 0, len = children.length; i < len && MAX_CHILDREN_PER_NODE; i++ ) { // (i < len && i < 24) works for simplified iland graphs, but probably should only do that to the head... 
+        if ( children[i].nodeType === 1 ) {
+          let hasNoType1Children = false;
+          childrenCount++;
+          queue.push({ //pass args via object or array
+            element: children[i],
+            depth: current.depth + 1
+          });
+        }
+      }
+    }
+    if (hasNoType1Children) {
+      childrenCount++;
+    }
+  }
+
+  return maxDepth;
+}
+
+function getChildrenCount() {
+  return childrenCount;
+}
+
 function hashCode(str) {
   var hash = 0;
   for (var i = 0; i < str.length; i++) {
@@ -204,6 +253,8 @@ function intToRGB(i) {
 module.exports = {
   getHtmlNode,
   recurseBF,
+  findMaxDepth,
+  getChildrenCount,
   events,
   hashCode,
   intToRGB,
@@ -3823,10 +3874,10 @@ const circumradius = require('circumradius');
 const _ = require('lodash');
 const DEL_THROTTLE = 500;
 const ALPHA = 20;
-const HEIGHT_STEP = 30;
+const HEIGHT_STEP = 15;
 const consoleThrottled = _.throttle(console.log, DEL_THROTTLE);
 
-module.exports = function (graph, settings) {
+module.exports = function (graph, settings, maxParticleCount, maxDepth) {
   const merge = require('ngraph.merge');
   settings = merge(settings, {
     interactive: true
@@ -3845,13 +3896,13 @@ module.exports = function (graph, settings) {
   let throttledDelaunatorTriangles = _.throttle(getDelaunayTriangles, DEL_THROTTLE);
   let nodeArray = [];
   let triangles = [];
-  let maxDepth = 0;
+  //let maxDepth = 0;
 
   // -------- Particles ----------
   var group;
   var pointCloud;
-  var maxParticleCount = 1500; //TODO: get the right number from recurseBF. IT IS KNOWN!
-  var particleCount = 1500; // TODO: DO THISSS!!!
+  //var maxParticleCount = 69; //TODO: get the right number from recurseBF. IT IS KNOWN!
+  var particleCount = 0; // TODO: DO THISSS!!!
   var particlesData = [];
   var particlePositions;
   var linesMesh;
@@ -3992,6 +4043,8 @@ module.exports = function (graph, settings) {
      */
     resetStable: resetStable,
     isStable: function() {isStable = true},
+    setMaxDepth: function(maxDepth) {maxDepth = maxDepth},
+    setMaxParticleCount: function(maxParticleCount) {maxParticleCount = maxParticleCount},
 
     /**
      * Stops animation and deallocates all allocated resources
@@ -4005,7 +4058,7 @@ module.exports = function (graph, settings) {
     layout: layout
   };
 
-  initialize();
+  initialize(maxParticleCount, maxDepth);
 
   return graphics;
 
@@ -4015,6 +4068,7 @@ module.exports = function (graph, settings) {
   }
 
   function initialize() {
+    console.log(`maxParticleCount: ${maxParticleCount}, maxDepth: ${maxDepth}`);
     nodeUIBuilder = defaults.createNodeUI;
     nodeRenderer  = defaults.nodeRenderer;
     linkUIBuilder = defaults.createLinkUI;
@@ -4050,12 +4104,12 @@ module.exports = function (graph, settings) {
     helper.material.blending = THREE.AdditiveBlending;
     helper.material.transparent = true;
     group.add( helper );
-    var segments = maxParticleCount * maxParticleCount;
+    //var segments = maxParticleCount * maxParticleCount;
 
-    positions = new Float32Array( segments * 3 );
-    
-    var faceColor = new THREE.Color( 0x108060 );
-    colors = new Float32Array( maxParticleCount * 3 );
+    positions = new Float32Array( maxParticleCount * 6 * 3 ); // not sure about this number
+
+    var faceColor = new THREE.Color( 0xbc632b );
+    colors = new Float32Array( maxParticleCount * 6 * 3 );
     for (let index = 0; index < colors.length; index += 3) {
       colors[index] = faceColor.r;
       colors[index+1] = faceColor.g;
@@ -4193,6 +4247,9 @@ module.exports = function (graph, settings) {
       // if (!isStable) {
       //   triangles = throttledDelaunatorTriangles(nodeArray);
       // }
+
+
+      // TODO: Maybe maxDepth should not be too big... looks weird
       if (triangles && triangles.length > 0) {
         for ( var i = 0; i < triangles.length; i++ )  {
           positions[ i * 3 + 0 ] = (nodeArray[triangles[i]].pos.x);
@@ -4240,44 +4297,11 @@ module.exports = function (graph, settings) {
       node.links[0].data &&
       node.links[0].data.depthOfChild) ? node.links[0].data.depthOfChild : 0;
     nodeUI[node.id].userData.depth = depth; 
-    maxDepth = maxDepth < depth ? depth : maxDepth;
-    //console.log(maxDepth);
     nodeArray.push(ui);
-    
-    Object.keys(nodeUI).forEach(function(key) {
-      if (!nodeUI[key].userData.seaNode && nodeUI[key].userData.depth < maxDepth) {
-        var a = new THREE.Vector3(nodeUI[node.links[0].fromId].pos.x, nodeUI[node.links[0].fromId].pos.y); //parent
-        var b = new THREE.Vector3(nodeUI[key].pos.x, nodeUI[key].pos.y); //child
-        var dir = new THREE.Vector3();
-        dir.subVectors( b, a );
-
-        nodeUI[key].userData.seaNode = {
-          pos: {
-            x: dir.x, //got the pos.x of the father below!!!
-            y: dir.y
-          },
-          userData: {
-            depth: null // this doeanst workk
-          }
-        }
-        // console.log('adding seanode');
-
-        //nodeArray.push(nodeUI[key].userData.seaNode); // <-------- Add it?
-
-        // console.group();
-        // console.log(nodeUI[key].userData.seaNode);
-        // console.log(nodeUI[node.links[0].fromId].pos.x); //pos.x of the father!!!
-        // console.groupEnd();
-      }
-    });
-
-
-    //---------------------> nodeArray.push(seaNode) !!!!
 
     if (!isStable) {
       triangles = throttledDelaunatorTriangles(nodeArray);
     }
-
     //scene.add(ui);
   }
 
