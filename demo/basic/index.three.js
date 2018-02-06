@@ -31,7 +31,7 @@ function start3dgraph (data) {
   graphics.renderNode(threeGraphics.nodeRenderer);
   graphics.renderLink(threeGraphics.linkRenderer);
 
-  // graphics.scene.fog = new graphics.THREE.FogExp2( 0xccccee, 0.001 );
+  graphics.scene.fog = new graphics.THREE.FogExp2( 0xccccee, 0.001 );
   graphics.scene.background = new graphics.THREE.Color( 0xeeeeee );
   graphics.run(); // begin animation loop
   //graphics.setMaxDepth(maxDepth);
