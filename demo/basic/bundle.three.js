@@ -3934,6 +3934,7 @@ module.exports = function (graph, settings, maxParticleCount, maxDepth) {
     requestAnimationFrame(run);
     if (!isStable) {
       isStable = layout.step();
+      //apply ilandom rules to layout here.
     }
     controls.update();
     renderOneFrame();

@@ -1,4 +1,3 @@
-var query = require('query-string').parse(window.location.search.substring(1));
 var renderGraph = require('../../');
 
 var graph = require('ngraph.graph')();
